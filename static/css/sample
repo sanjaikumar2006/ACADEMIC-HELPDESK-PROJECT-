@@ -1,0 +1,151 @@
+body {
+  font-family: 'Poppins', 'Segoe UI', Arial, sans-serif;
+  background: radial-gradient(circle at top left, #ffe8f0 0%, #fff8e7 40%, #e9faff 100%);
+  margin: 0;
+  color: #1e1e2f;
+  overflow-x: hidden;
+}
+
+.main-wrapper {
+  max-width: 520px;
+  margin: 45px auto;
+  transition: all 0.3s ease-in-out;
+}
+
+/* 🌟 Vibrant Gradient Header */
+.header-gradient {
+  background: linear-gradient(135deg, #ff4d79 0%, #ffb84d 45%, #6ee7ff 100%);
+  color: #fff;
+  border-radius: 20px 20px 0 0;
+  padding: 22px 25px 14px 22px;
+  display: flex;
+  align-items: center;
+  box-shadow: 0 6px 25px rgba(255, 107, 136, 0.45);
+  animation: headerGlow 4s infinite alternate ease-in-out;
+}
+
+@keyframes headerGlow {
+  from { box-shadow: 0 6px 25px rgba(255, 107, 136, 0.45); }
+  to { box-shadow: 0 6px 35px rgba(255, 187, 68, 0.55); }
+}
+
+.header-icon {
+  font-size: 1.8em;
+  margin-right: 10px;
+  text-shadow: 0 0 8px rgba(255,255,255,0.8);
+}
+
+.header-title {
+  font-size: 1.5em;
+  font-weight: 700;
+  letter-spacing: 1.8px;
+  text-shadow: 0 0 10px rgba(255,255,255,0.9);
+}
+
+/* 💬 Card with floating glow */
+.academic-helps-card {
+  background: #ffffffcc;
+  backdrop-filter: blur(12px);
+  padding: 20px 25px;
+  border-radius: 0 0 20px 20px;
+  margin-bottom: 22px;
+  box-shadow: 0 6px 25px rgba(0, 0, 0, 0.15);
+  border: 2px solid rgba(255, 255, 255, 0.6);
+  transition: transform 0.3s ease;
+}
+.academic-helps-card:hover {
+  transform: scale(1.01);
+}
+
+/* 💬 Chat Section */
+.chat-section {
+  padding: 0 10px;
+}
+
+.chat-box {
+  min-height: 70px;
+  background: #fefefe;
+  border-radius: 16px;
+  padding: 12px;
+  margin-bottom: 14px;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.08);
+  font-size: 15.5px;
+  max-height: 230px;
+  overflow-y: auto;
+}
+
+/* 🗨️ Chat Messages */
+.chat-msg {
+  margin: 10px 0;
+  padding: 12px 16px;
+  border-radius: 12px;
+  word-break: break-word;
+  font-weight: 500;
+  transition: all 0.25s ease;
+}
+
+/* 🌼 Bright, unique color bubbles */
+.bot-msg {
+  background: linear-gradient(135deg, #ffb3ec, #ffedb8);
+  color: #2c1e4a;
+  text-align: left;
+  box-shadow: 0 2px 8px rgba(255, 181, 220, 0.4);
+}
+
+.user-msg {
+  background: linear-gradient(135deg, #a2f0ff, #baffc9);
+  color: #054a35;
+  text-align: right;
+  margin-left: auto;
+  box-shadow: 0 2px 8px rgba(162, 255, 220, 0.4);
+}
+
+/* 🧠 Input Row */
+.input-row {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.input-box {
+  flex: 1;
+  border: 1.8px solid #d2d2d2;
+  border-radius: 25px;
+  padding: 12px 18px;
+  font-size: 1em;
+  outline: none;
+  background: #fff;
+  transition: all 0.25s ease;
+}
+
+.input-box:focus {
+  border-color: #ff70a6;
+  box-shadow: 0 0 12px rgba(255, 140, 200, 0.45);
+}
+
+/* 🚀 Vibrant Button */
+.send-btn {
+  background: linear-gradient(90deg, #ff70a6 0%, #ffcc70 50%, #70e1f5 100%);
+  color: #fff;
+  padding: 10px 28px;
+  border: none;
+  border-radius: 25px;
+  font-size: 17px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 4px 18px rgba(255, 128, 160, 0.45);
+  transition: all 0.3s ease;
+}
+
+.send-btn:hover {
+  transform: translateY(-3px) scale(1.05);
+  box-shadow: 0 6px 22px rgba(255, 160, 180, 0.55);
+  opacity: 0.95;
+}
+
+.footer {
+  font-size: 0.95em;
+  color: #737a8c;
+  text-align: center;
+  margin-top: 10px;
+}
