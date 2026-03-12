@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Student Registration - Vel Tech</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <link rel="stylesheet" href="/static/css/attendance.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+</head>
+
+<body>
+    <!-- Navigation Bar -->
+    <nav class="navbar">
+        <div class="nav-logo">
+            <i class="fas fa-graduation-cap"></i> <span>Vel Tech High Tech</span>
+        </div>
+        <ul class="nav-links">
+            <li><a href="/"><i class="fas fa-comment-dots"></i> Chatbot</a></li>
+            <li><a href="/register" class="active"><i class="fas fa-user-plus"></i> Register</a></li>
+            <li><a href="/attendance"><i class="fas fa-camera"></i> Attendance</a></li>
+            <li><a href="/report"><i class="fas fa-file-alt"></i> Report</a></li>
+        </ul>
+    </nav>
+
+    <div class="attendance-container animate-in">
+        <h1><i class="fas fa-user-graduate"></i> Student Registration</h1>
+        <p class="subtitle">Complete your profile and capture your face for biometric attendance.</p>
+
+        <div class="form-group">
+            <label for="student-name">Full Name</label>
+            <input type="text" id="student-name" class="form-input" placeholder="Enter student full name">
+        </div>
+
+        <div class="form-group">
+            <label for="roll-number">Roll Number</label>
+            <input type="text" id="roll-number" class="form-input" placeholder="e.g. 2024CSE001">
+        </div>
+
+        <div class="webcam-wrapper">
+            <video id="webcam-video" autoplay></video>
+        </div>
+
+        <button id="register-btn" class="action-btn">
+            <i class="fas fa-camera"></i> Capture & Register Student
+        </button>
+
+        <div id="result-msg" class="result-msg"></div>
+
+        <div style="margin-top: 40px; padding-top: 30px; border-top: 1px solid var(--glass-border);">
+            <h3 style="font-size: 1rem; margin-bottom: 15px;"><i class="fas fa-file-import"></i> Bulk Import (CSV)</h3>
+            <div style="display: flex; gap: 10px; align-items: center;">
+                <input type="file" id="bulk-csv" accept=".csv" class="form-input" style="padding: 10px;">
+                <button id="bulk-btn" class="action-btn" style="width: auto; padding: 0 20px; background: #059669;">
+                    <i class="fas fa-upload"></i> Import
+                </button>
+            </div>
+            <p style="font-size: 0.75rem; color: #94a3b8; margin-top: 10px;">
+                Format: <code>name, roll_number</code> (One student per line)
+            </p>
+        </div>
+    </div>
+
+    <script src="/static/js/webcam.js"></script>
+    <script>
+        const regBtn = document.getElementById('register-btn');
+
+        window.onload = async () => {
+            regBtn.disabled = true;
+            regBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Initializing Camera...';
+
+            const success = await startCamera('webcam-video');
+            if (success) {
+                regBtn.disabled = false;
+                regBtn.innerHTML = '<i class="fas fa-camera"></i> Capture & Register Student';
+            } else {
+                regBtn.innerHTML = '<i class="fas fa-exclamation-triangle"></i> Camera Error';
+            }
+        };
+
+        regBtn.onclick = async () => {
+            const name = document.getElementById('student-name').value;
+            const roll = document.getElementById('roll-number').value;
+
+            if (!name || !roll) {
+                showResult('result-msg', 'Please enter name and roll number.', 'error');
+                return;
+            }
+
+            const frame = captureFrame('webcam-video');
+            if (!frame) {
+                showResult('result-msg', 'Camera not ready. Please refresh or check browser permissions.', 'error');
+                return;
+            }
+
+            showResult('result-msg', 'Processing registration patterns...', 'success');
+
+            try {
+                const res = await fetch('/register_student', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name, roll, image: frame })
+                });
+
+                const data = await res.json();
+                if (data.success) {
+                    showResult('result-msg', '<i class="fas fa-check-circle"></i> ' + data.message, 'success');
+                    document.getElementById('student-name').value = '';
+                    document.getElementById('roll-number').value = '';
+                } else {
+                    showResult('result-msg', '<i class="fas fa-exclamation-triangle"></i> ' + data.message, 'error');
+                }
+            } catch (err) {
+                showResult('result-msg', 'Connection failed. Is the server running?', 'error');
+            }
+        };
+        const bulkBtn = document.getElementById('bulk-btn');
+        bulkBtn.onclick = async () => {
+            const fileInput = document.getElementById('bulk-csv');
+            if (fileInput.files.length === 0) {
+                showResult('result-msg', 'Please select a CSV file first.', 'error');
+                return;
+            }
+
+            const file = fileInput.files[0];
+            const reader = new FileReader();
+
+            reader.onload = async (e) => {
+                const text = e.target.result;
+                const lines = text.split('\n').filter(line => line.trim() !== '');
+                const students = lines.map(line => {
+                    const [name, roll] = line.split(',').map(s => s.trim());
+                    return { name, roll };
+                });
+
+                showResult('result-msg', `Importing ${students.length} students...`, 'success');
+
+                try {
+                    const res = await fetch('/bulk_register', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ students })
+                    });
+                    const data = await res.json();
+                    if (data.success) {
+                        showResult('result-msg', `✅ Success: ${data.message}`, 'success');
+                    } else {
+                        showResult('result-msg', `❌ Error: ${data.message}`, 'error');
+                    }
+                } catch (err) {
+                    showResult('result-msg', 'Bulk import failed.', 'error');
+                }
+            };
+            reader.readAsText(file);
+        };
+    </script>
+</body>
+
+</html>

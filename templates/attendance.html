@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mark Attendance - Vel Tech</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <link rel="stylesheet" href="/static/css/attendance.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+</head>
+
+<body>
+    <!-- Navigation Bar -->
+    <nav class="navbar">
+        <div class="nav-logo">
+            <i class="fas fa-graduation-cap"></i> <span>Vel Tech High Tech</span>
+        </div>
+        <ul class="nav-links">
+            <li><a href="/"><i class="fas fa-comment-dots"></i> Chatbot</a></li>
+            <li><a href="/register"><i class="fas fa-user-plus"></i> Register</a></li>
+            <li><a href="/attendance" class="active"><i class="fas fa-camera"></i> Attendance</a></li>
+            <li><a href="/report"><i class="fas fa-file-alt"></i> Report</a></li>
+        </ul>
+    </nav>
+
+    <div class="attendance-container animate-in">
+        <h1><i class="fas fa-camera-retro"></i> Biometric Attendance</h1>
+        <p class="subtitle">Position your face clearly within the camera frame for verification.</p>
+
+
+        <div class="form-group" style="margin-bottom: 20px;">
+            <label for="subject-select"><i class="fas fa-book"></i> Select Session</label>
+            <select id="subject-select" class="form-input">
+                <option value="Overall Attendance">Overall Morning Attendance (08:15 - 09:00)</option>
+                <option value="Python Programming">Python Programming (09:00 - 10:00)</option>
+                <option value="Data Structures">Data Structures (10:00 - 11:00)</option>
+                <option value="Machine Learning">Machine Learning (11:15 - 12:15)</option>
+                <option value="Cloud Computing">Cloud Computing (12:15 - 13:15)</option>
+                <option value="Ethics & Values">Ethics & Values (14:00 - 15:00)</option>
+                <option value="Mathematics IV">Mathematics IV (15:00 - 16:00)</option>
+            </select>
+        </div>
+
+        <div class="webcam-wrapper">
+            <video id="webcam-video" autoplay></video>
+            <div id="identified-person"
+                style="position: absolute; bottom: 0; left: 0; right: 0; background: rgba(0,0,0,0.6); color: #4ade80; padding: 10px; font-weight: bold; text-align: center; display: none; border-bottom-left-radius: 24px; border-bottom-right-radius: 24px;">
+                <i class="fas fa-user-check"></i> <span id="student-name-display"></span>
+            </div>
+        </div>
+
+        <button id="mark-btn" class="action-btn">
+            <i class="fas fa-user-check"></i> Verify & Mark Attendance
+        </button>
+
+        <div id="result-msg" class="result-msg"></div>
+    </div>
+
+    <script src="/static/js/webcam.js"></script>
+    <script>
+        const markBtn = document.getElementById('mark-btn');
+
+        window.onload = async () => {
+            markBtn.disabled = true;
+            markBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Initializing Camera...';
+
+            const success = await startCamera('webcam-video');
+            if (success) {
+                markBtn.disabled = false;
+                markBtn.innerHTML = '<i class="fas fa-user-check"></i> Verify & Mark Attendance';
+            } else {
+                markBtn.innerHTML = '<i class="fas fa-exclamation-triangle"></i> Camera Error';
+            }
+        };
+
+        markBtn.onclick = async () => {
+            const frame = captureFrame('webcam-video');
+            if (!frame) {
+                showResult('result-msg', 'Camera not ready. Please refresh or check browser permissions.', 'error');
+                return;
+            }
+
+            showResult('result-msg', 'Analyzing facial features...', 'success');
+
+            const subject = document.getElementById('subject-select').value;
+
+            try {
+                const res = await fetch('/mark_attendance', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ image: frame, subject })
+                });
+
+                const data = await res.json();
+                if (data.success) {
+                    showResult('result-msg', '<i class="fas fa-check-circle"></i> ' + data.message, 'success');
+
+                    // Display identified name below camera
+                    document.getElementById('student-name-display').innerText = data.student_name;
+                    document.getElementById('identified-person').style.display = 'block';
+
+                    // Reset after 5 seconds
+                    setTimeout(() => {
+                        document.getElementById('identified-person').style.display = 'none';
+                    }, 5000);
+                } else {
+                    showResult('result-msg', '<i class="fas fa-times-circle"></i> ' + data.message, 'error');
+                }
+            } catch (err) {
+                showResult('result-msg', 'Network error. Please try again.', 'error');
+            }
+        };
+    </script>
+</body>
+
+</html>

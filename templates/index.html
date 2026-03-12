@@ -1,27 +1,107 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8">
-  <title>ACADEMIC HELPS</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description"
+    content="Academic Assistant Chatbot with Face Detection Attendance System for Vel Tech High Tech College.">
+  <title>Academic Chatbot & Attendance System</title>
   <link rel="stylesheet" href="/static/css/style.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
 </head>
+
 <body>
+
+  <!-- Navigation Bar -->
+  <nav class="navbar">
+    <div class="nav-logo">
+      <i class="fas fa-graduation-cap"></i> <span>Vel Tech High Tech</span>
+      <div id="live-clock" style="font-size: 0.8rem; opacity: 0.7; margin-left: 15px; font-weight: 500;"></div>
+    </div>
+    <ul class="nav-links">
+      <li><a href="/" class="active"><i class="fas fa-comment-dots"></i> Chatbot</a></li>
+      <li><a href="/student_view"><i class="fas fa-user-circle"></i> Profile</a></li>
+      <li><a href="/attendance"><i class="fas fa-camera"></i> Attendance</a></li>
+      <li><a href="/gpa"><i class="fas fa-calculator"></i> GPA</a></li>
+      <li><a href="/register"><i class="fas fa-user-plus"></i> <small>Admin</small></a></li>
+      <li><a href="/report"><i class="fas fa-file-alt"></i> <small>Stats</small></a></li>
+    </ul>
+  </nav>
+
+  <script>
+    function updateClock() {
+      const now = new Date();
+      document.getElementById('live-clock').innerText = now.toLocaleTimeString();
+    }
+    setInterval(updateClock, 1000);
+    updateClock();
+  </script>
+
+  <style>
+    .notice-marquee {
+      background: rgba(255, 255, 255, 0.05);
+      border-bottom: 1px solid var(--glass-border);
+      padding: 10px 0;
+      overflow: hidden;
+      white-space: nowrap;
+      position: relative;
+      font-size: 0.9rem;
+    }
+
+    .marquee-content {
+      display: inline-block;
+      padding-left: 100%;
+      animation: marquee 30s linear infinite;
+    }
+
+    @keyframes marquee {
+      0% {
+        transform: translate(0, 0);
+      }
+
+      100% {
+        transform: translate(-100%, 0);
+      }
+    }
+
+    .notice-item {
+      display: inline-block;
+      margin-right: 50px;
+      color: var(--primary);
+      font-weight: 600;
+    }
+
+    .badge-news {
+      background: var(--primary-gradient);
+      padding: 2px 8px;
+      border-radius: 4px;
+      color: white;
+      font-size: 0.7rem;
+      margin-right: 10px;
+      text-transform: uppercase;
+    }
+  </style>
+
+  <div class="notice-marquee" id="notice-bar" style="display: none;">
+    <div class="marquee-content" id="notice-content">
+      <!-- Logic will inject notices here -->
+    </div>
+  </div>
 
   <div class="main-wrapper">
 
     <!-- HEADER -->
     <div class="header-gradient">
-      <span class="header-icon">🎓</span>
-      <span class="header-title">ACADEMIC HELPS</span>
+      <span class="header-icon">🤖</span>
+      <span class="header-title">ACADEMIC ASSISTANT</span>
+      <button id="clear-chat" title="Clear Chat"><i class="fas fa-trash-alt"></i></button>
     </div>
 
     <!-- ABOUT CARD -->
     <div class="academic-helps-card">
-      <p><b>ACADEMIC HELPS:</b> Your personal academic assistant, providing guidance for assignments, exams, research projects, and overall academic growth.</p>
-      <p><b>Student Support:</b> Helps students clarify concepts, manage study schedules, and overcome academic challenges efficiently.</p>
-      <p><b>Subjects Covered:</b> Science, Mathematics, Engineering, Management, Arts, and Social Sciences.</p>
-      <p><b>Learning Resources:</b> Projects, question papers, tutorials, and study strategies.</p>
-      <p><b>Academic Guidance:</b> Personalized support for exams, assignments, and research.</p>
+      <p><b>ACADEMIC ASSISTANT:</b> Your personal guide for Vel Tech High Tech College. Ask about courses, faculty,
+        placements, and more.</p>
     </div>
 
     <!-- CHAT SECTION -->
@@ -29,32 +109,38 @@
 
       <!-- CHAT BOX -->
       <div id="chat-box" class="chat-box">
-        <div class="chat-msg bot-msg">
-          💬 Hello! I'm your Academic Assistant from ACADEMIC HELPS.<br>
-          How can I help you today with your studies?
+        <div class="chat-msg bot-msg animate-in">
+          💬 Hello! I'm your Academic Assistant.<br>
+          How can I help you today?
         </div>
       </div>
 
-      <!-- 🔥 INPUT + SEND + VOICE (IMPORTANT PART) -->
+      <!-- Typing Indicator -->
+      <div id="typing-indicator" class="typing-indicator hidden">
+        <span></span><span></span><span></span>
+      </div>
+
+      <!-- Suggestions Chips -->
+      <div id="suggestions-container" class="suggestions-container">
+        <!-- Suggestions will be injected here -->
+      </div>
+
+      <!-- 🔥 INPUT + SEND + VOICE -->
       <div class="input-row">
-        <input
-          type="text"
-          id="user-input"
-          class="input-box"
-          placeholder="Type your message here..."
-          autocomplete="off"
-        >
+        <input type="text" id="user-input" class="input-box" placeholder="Ask me something..." autocomplete="off">
 
-        <button id="send-btn" class="send-btn">Send</button>
+        <button id="send-btn" class="send-btn" title="Send">
+          <i class="fas fa-paper-plane"></i>
+        </button>
 
-        <button id="voice-btn" class="voice-btn">
-          <span class="mic-icon">🎤</span>
+        <button id="voice-btn" class="voice-btn" title="Voice Input">
+          <i class="fas fa-microphone"></i>
         </button>
       </div>
 
       <!-- FOOTER -->
       <div class="footer">
-        © 2025 ACADEMIC HELPS | Developed for Academic Assistance
+        © 2026 VEL TECH | Powered by AI & Face Recognition
       </div>
 
     </div>
@@ -63,4 +149,5 @@
   <!-- SCRIPT -->
   <script src="/static/js/script.js"></script>
 </body>
+
 </html>

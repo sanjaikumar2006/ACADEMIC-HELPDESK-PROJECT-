@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+database.db
+*.png
+*.jpg
+temp_*.py
+fix_db.py
+migrate_subject.py
+.env
+venv/
+env/

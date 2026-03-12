@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Student Self-Service - Vel Tech</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <link rel="stylesheet" href="/static/css/attendance.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <style>
+        .profile-container {
+            max-width: 600px;
+            margin: 40px auto;
+        }
+
+        .percentage-ring {
+            width: 150px;
+            height: 150px;
+            border-radius: 50%;
+            background: conic-gradient(var(--primary) var(--percentage), rgba(255, 255, 255, 0.1) 0);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 20px auto;
+            position: relative;
+        }
+
+        .percentage-ring::after {
+            content: attr(data-value);
+            width: 120px;
+            height: 120px;
+            background: #0f172a;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.8rem;
+            font-weight: 800;
+        }
+    </style>
+</head>
+
+<body>
+    <nav class="navbar">
+        <div class="nav-logo">
+            <i class="fas fa-graduation-cap"></i> <span>Vel Tech High Tech</span>
+        </div>
+        <ul class="nav-links">
+            <li><a href="/"><i class="fas fa-comment-dots"></i> Chatbot</a></li>
+            <li><a href="/student_view" class="active"><i class="fas fa-user-circle"></i> My Profile</a></li>
+            <li><a href="/attendance"><i class="fas fa-camera"></i> Attendance</a></li>
+        </ul>
+    </nav>
+
+    <div class="attendance-container animate-in">
+        <h1><i class="fas fa-user-search"></i> Student Attendance Portal</h1>
+        <p class="subtitle">Enter your roll number to view your attendance personality and history.</p>
+
+        <div class="form-group" style="display: flex; gap: 10px; margin-bottom: 20px;" id="id-lookup-section">
+            <input type="text" id="lookup-roll" class="form-input" placeholder="Enter your roll number">
+            <button onclick="fetchProfile()" class="action-btn" style="width: auto; padding: 0 25px;">
+                <i class="fas fa-search"></i> Check
+            </button>
+        </div>
+
+        <div id="face-login-section" style="display: none; text-align: center; margin-bottom: 30px;">
+            <div class="webcam-wrapper"
+                style="max-width:300px; margin: 0 auto 20px; border-radius: 50%; overflow: hidden; border: 4px solid var(--primary);">
+                <video id="login-video" autoplay style="width: 100%; height: 300px; object-fit: cover;"></video>
+            </div>
+            <button id="biometric-btn" class="action-btn" style="width: 250px; background: var(--primary-gradient);">
+                <i class="fas fa-fingerprint"></i> Scan My Face to Login
+            </button>
+        </div>
+
+        <div style="text-align: center; margin-bottom: 30px;">
+            <button onclick="toggleLoginMethod()" id="toggle-btn"
+                style="background:none; border:none; color:var(--primary); cursor:pointer; font-size: 0.9rem; text-decoration: underline;">
+                Use Face ID Login instead
+            </button>
+        </div>
+
+        <div id="profile-result" style="display: none;">
+            <div class="stat-card" style="margin-bottom: 20px;">
+                <h2 id="student-name-display" style="margin-bottom: 5px;">Student Name</h2>
+                <p id="roll-display">Roll Number</p>
+            </div>
+
+            <div class="percentage-ring" id="percent-ring" data-value="0%"></div>
+            <p style="text-align: center; color: #94a3b8; margin-bottom: 30px;" id="stat-text">You have been present for
+                0 out of 0 days.</p>
+
+            <h3><i class="fas fa-history"></i> Attendance Log</h3>
+            <div class="report-table-container">
+                <table class="report-table">
+                    <thead>
+                        <tr>
+                            <th>Date</th>
+                            <th>Time Recorded</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody id="history-body"></tbody>
+                </table>
+            </div>
+        </div>
+
+        <div id="error-msg" class="result-msg error" style="display: none;"></div>
+    </div>
+
+    <script>
+        let isFaceLogin = false;
+
+        async function toggleLoginMethod() {
+            const idSection = document.getElementById('id-lookup-section');
+            const faceSection = document.getElementById('face-login-section');
+            const toggleBtn = document.getElementById('toggle-btn');
+
+            isFaceLogin = !isFaceLogin;
+
+            if (isFaceLogin) {
+                idSection.style.display = 'none';
+                faceSection.style.display = 'block';
+                toggleBtn.innerText = "Use Roll Number instead";
+                await startCamera('login-video');
+            } else {
+                idSection.style.display = 'flex';
+                faceSection.style.display = 'none';
+                toggleBtn.innerText = "Use Face ID Login instead";
+                if (currentStream) currentStream.getTracks().forEach(t => t.stop());
+            }
+        }
+
+        document.getElementById('biometric-btn').onclick = async () => {
+            const video = document.getElementById('login-video');
+            const canvas = document.createElement('canvas');
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            canvas.getContext('2d').drawImage(video, 0, 0);
+            const frame = canvas.toDataURL('image/jpeg');
+
+            const btn = document.getElementById('biometric-btn');
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Verifying...';
+            btn.disabled = true;
+
+            try {
+                const res = await fetch('/face_login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ image: frame })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    document.getElementById('lookup-roll').value = data.roll;
+                    await fetchProfile();
+                    // Close camera after success
+                    if (currentStream) currentStream.getTracks().forEach(t => t.stop());
+                } else {
+                    const errorEl = document.getElementById('error-msg');
+                    errorEl.innerText = data.message;
+                    errorEl.style.display = 'block';
+                }
+            } catch (err) {
+                console.error(err);
+            } finally {
+                btn.innerHTML = '<i class="fas fa-fingerprint"></i> Scan My Face to Login';
+                btn.disabled = false;
+            }
+        };
+
+        async function fetchProfile() {
+            const roll = document.getElementById('lookup-roll').value.trim();
+            if (!roll) return;
+
+            const res = await fetch(`/student_profile/${roll}`);
+            const data = await res.json();
+
+            if (data.success) {
+                document.getElementById('profile-result').style.display = 'block';
+                document.getElementById('error-msg').style.display = 'none';
+
+                document.getElementById('student-name-display').innerText = data.name;
+                document.getElementById('roll-display').innerText = `ID: ${data.roll}`;
+
+                const ring = document.getElementById('percent-ring');
+                ring.style.setProperty('--percentage', `${data.percentage}%`);
+                ring.setAttribute('data-value', `${data.percentage}%`);
+
+                document.getElementById('stat-text').innerText = `You have been present for ${data.present_count} out of ${data.total_days} active days.`;
+
+                const tbody = document.getElementById('history-body');
+                tbody.innerHTML = '';
+                data.history.forEach(log => {
+                    const tr = document.createElement('tr');
+                    tr.innerHTML = `
+                        <td>${log.date}</td>
+                        <td>${log.time}</td>
+                        <td><span style="color: #4ade80;"><i class="fas fa-check-circle"></i> Present</span></td>
+                    `;
+                    tbody.appendChild(tr);
+                });
+            } else {
+                document.getElementById('profile-result').style.display = 'none';
+                const errorEl = document.getElementById('error-msg');
+                errorEl.innerText = data.message;
+                errorEl.style.display = 'block';
+            }
+        }
+    </script>
+</body>
+
+</html>

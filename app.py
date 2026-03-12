@@ -1,7 +1,93 @@
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, session, redirect, url_for
 import sqlite3
+import base64
+import pickle
+import numpy as np
+import cv2
+import os
+from datetime import datetime
+from functools import wraps
 
+# ================== CONFIG ==================
 app = Flask(__name__)
+app.secret_key = "vel_tech_secret_key_2024" # Required for sessions
+
+# ================== ACADEMIC TIMETABLE ==================
+# Overall attendance is strictly 08:15 to 09:00
+# Subject periods follow a standard day-order
+TIMETABLE = {
+    "Overall Attendance": {"start": "08:15", "end": "09:00"},
+    "Python Programming": {"start": "09:00", "end": "10:00"},
+    "Data Structures": {"start": "10:00", "end": "11:00"},
+    "Machine Learning": {"start": "11:15", "end": "12:15"},
+    "Cloud Computing": {"start": "12:15", "end": "13:15"},
+    "Ethics & Values": {"start": "14:00", "end": "15:00"},
+    "Mathematics IV": {"start": "15:00", "end": "16:00"}
+}
+
+def is_within_time_window(subject):
+    if subject not in TIMETABLE:
+        return True, "" # Default to true for unscheduled things
+    
+    now = datetime.now().strftime("%H:%M")
+    start = TIMETABLE[subject]["start"]
+    end = TIMETABLE[subject]["end"]
+    
+    if start <= now <= end:
+        return True, ""
+    
+    if now < start:
+        return False, f"Too early! {subject} starts at {start}."
+    else:
+        return False, f"Too late! {subject} window was {start} to {end}."
+
+# Dummy Admin Credentials (In a real app, store hashed in DB)
+ADMIN_USER = "admin"
+ADMIN_PASS = "admin123"
+
+# Decorator to protect routes
+def login_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if "logged_in" not in session:
+            return redirect(url_for("login_page"))
+        return f(*args, **kwargs)
+    return decorated_function
+
+# ================== AUTH ROUTES ==================
+@app.route("/login")
+def login_page():
+    return render_template("login.html")
+
+@app.route("/api/login", methods=["POST"])
+def api_login():
+    data = request.json
+    if data.get("username") == ADMIN_USER and data.get("password") == ADMIN_PASS:
+        session["logged_in"] = True
+        return jsonify({"success": True})
+    return jsonify({"success": False, "message": "Invalid credentials"})
+
+@app.route("/logout")
+def logout():
+    session.pop("logged_in", None)
+    return redirect(url_for("home"))
+
+
+# ================== FACE RECOGNITION CONFIG ==================
+# ... (rest of the config)
+# Try to import face_recognition (requires dlib/cmake)
+# If it fails, we use OpenCV's built-in Haar Cascades and LBPH
+try:
+    import face_recognition
+    USE_FACE_RECOGNITION = True
+    print("[INFO] Using high-accuracy face_recognition library.")
+except ImportError:
+    USE_FACE_RECOGNITION = False
+    print("[WARNING] face_recognition not found. Using OpenCV Fallback.")
+
+# Path to OpenCV Face Detection model (included with opencv-python)
+HAAR_CASCADE_PATH = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
+face_cascade = cv2.CascadeClassifier(HAAR_CASCADE_PATH)
 
 # ================== EMOTION DETECTION ==================
 def detect_emotion(text):
@@ -31,6 +117,8 @@ def detect_emotion(text):
 def init_db():
     conn = sqlite3.connect("database.db")
     c = conn.cursor()
+
+    # Chat history table
     c.execute("""
         CREATE TABLE IF NOT EXISTS messages (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -38,8 +126,69 @@ def init_db():
             bot_reply TEXT
         )
     """)
+
+    # Student face registration table
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS students (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            roll_number TEXT UNIQUE NOT NULL,
+            face_encoding BLOB NOT NULL,
+            registered_at TEXT
+        )
+    """)
+
+    # Attendance table (Subject-Wise & Biometric)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS attendance (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            student_id INTEGER,
+            student_name TEXT,
+            roll_number TEXT,
+            subject TEXT,
+            date TEXT,
+            time TEXT,
+            status TEXT DEFAULT 'Present',
+            captured_face BLOB,
+            FOREIGN KEY(student_id) REFERENCES students(id)
+        )
+    """)
+
+    # Notices table
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS notices (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            content TEXT NOT NULL,
+            posted_at TEXT
+        )
+    """)
+
     conn.commit()
     conn.close()
+
+# ================== NOTICES ROUTES ==================
+@app.route("/get_notices")
+def get_notices():
+    conn = sqlite3.connect("database.db")
+    c = conn.cursor()
+    c.execute("SELECT content, posted_at FROM notices ORDER BY id DESC LIMIT 5")
+    rows = c.fetchall()
+    conn.close()
+    return jsonify([{"content": r[0], "date": r[1]} for r in rows])
+
+@app.route("/post_notice", methods=["POST"])
+@login_required
+def post_notice():
+    content = request.json.get("content")
+    if not content:
+        return jsonify({"success": False})
+    conn = sqlite3.connect("database.db")
+    c = conn.cursor()
+    c.execute("INSERT INTO notices (content, posted_at) VALUES (?, ?)", 
+              (content, datetime.now().strftime("%Y-%m-%d %H:%M")))
+    conn.commit()
+    conn.close()
+    return jsonify({"success": True})
 
 
 # ================== HOME ==================
@@ -48,840 +197,118 @@ def home():
     return render_template("index.html")
 
 
+# ================== ATTENDANCE PAGES ==================
+@app.route("/register")
+@login_required
+def register_page():
+    return render_template("register.html")
+
+
+@app.route("/attendance")
+def attendance_page():
+    return render_template("attendance.html")
+
+
+@app.route("/report")
+@login_required
+def report_page():
+    return render_template("report.html")
+
+
+# ================== EXTRA FEATURES ==================
+@app.route("/gpa")
+def gpa_page():
+    return render_template("gpa.html")
+
+@app.route("/student_view")
+def student_view_page():
+    return render_template("student_profile.html")
+
+
+# ================== CHATBOT DATA ==================
+SUGGESTIONS = ["About College", "Courses", "Placements", "Admissions", "Hostel", "Attendance Rules"]
+
+RESPONSES = {
+    # Greetings
+    "hi": "👋 Hi! Welcome to VEL TECH HIGH TECH College Academic Helpdesk.",
+    "hello": "👋 Hello! This is VEL TECH HIGH TECH College AI Academic Assistant.",
+    "hey": "😊 Hey! How can I help you with VEL TECH HIGH TECH College today?",
+    "bye": "👋 Goodbye! Feel free to come back for more info about VEL TECH HIGH TECH College.",
+    "how are you": "😊 I’m doing great and ready to help you with VEL TECH HIGH TECH College info.",
+
+    # College Info
+    "college": "🏫 VEL TECH HIGH TECH College of Engineering and Technology, Chennai – NAAC A+ accredited, affiliated to Anna University.",
+    "vision": "🎯 Vision: To empower students with innovative education and real-world exposure.",
+    "mission": "🚀 Mission: To deliver excellence in education, ethics, and employability.",
+    "principal": "👨‍🏫 Principal: Dr.E.Kamalanaban, Ph.D., with 28 years of experience.",
+    "chairman": "👔 Chairman: Col.Prof.Dr.Vel.Shri.R.Rangarajan.",
+    "established": "📅 Established in 2002 in Aavadi, Chennai.",
+    "code": "🆔 Anna University College Code is 2710.",
+    "accreditation": "🏆 Accredited by NAAC A+ and NBA for major departments.",
+
+    # Academics
+    "academic": "📚 VEL TECH maintains high academic standards with continuous assessment and mentoring.",
+    "attendance": "🕒 Minimum 75% attendance is required for semester exams.",
+    "semester": "🗓️ The college follows the Anna University CBCS semester system.",
+    "exam": "📝 End semester exams are conducted by Anna University. Result on COE portal.",
+    "internal": "📊 Internal marks are based on cycle tests, assignments, and lab work.",
+    "mentoring": "👩‍🏫 Each student is assigned a mentor for academic and personal support.",
+
+    # Placements
+    "placement": "💼 92% placement rate with top recruiters like TCS, Infosys, Wipro, and Zoho.",
+    "package": "💰 Average salary package is around ₹4 LPA, with the highest exceeding ₹10 LPA.",
+    "training": "🧠 Placement training (aptitude & soft skills) starts from the 2nd year.",
+
+    # Courses
+    "course": "🎓 UG & PG programs available: CSE, AI & DS, IT, ECE, EEE, MECH, CIVIL, MBA, MCA.",
+    "cse": "💻 Computer Science & Engineering focuses on AI, Data Science, and Software Development.",
+    "ai": "🤖 Artificial Intelligence & Data Science focuses on ML, Deep Learning, and Analytics.",
+
+    # Facilities
+    "library": "📚 Central Library open from 8:00 AM to 8:00 PM with huge digital resources.",
+    "hostel": "🏠 Separate hostels for boys and girls with Wi-Fi, mess, and 24/7 security.",
+    "transport": "🚌 College buses cover all major areas of Chennai and suburbs.",
+    "wifi": "🌐 High-speed Wi-Fi available across the campus.",
+    "canteen": "🍽️ Hygienic canteen serving healthy food for students.",
+
+    # Discipline
+    "discipline": "⚖️ Strict discipline is maintained. Uniform and ID cards are mandatory.",
+    "ragging": "🚫 Ragging is strictly prohibited as per UGC norms.",
+
+    # Admissions
+    "admission": "📥 Admissions available via Anna University (TNEA) counselling and management quota.",
+    "eligibility": "🎓 Eligibility criteria follow Anna University and AICTE norms.",
+    "scholarship": "🎓 Government and merit-based scholarships are supported.",
+
+    "default": "🤖 Sorry, I didn’t get that. Try asking about courses, faculty, placements, or admissions!"
+}
+
 # ================== CHATBOT LOGIC ==================
 def chatbot_logic(user_message):
-    user_message = user_message.lower()
+    user_message = user_message.lower().strip()
     emotion = detect_emotion(user_message)
-
-    # -------- ACADEMIC TRIGGERS --------
-    academic_triggers=[
-"college","institution","campus","college name","about college","college overview","college details","college profile","college identity","college environment","college culture","college vision","college mission","college code","anna university","aicte","naac","nba","accreditation",
-"location","college location","campus location","campus area","campus size","campus facilities","green campus","connectivity","transport","bus","college bus",
-"academics","academic","academic excellence","academic framework","semester","semester system","cbcs","attendance","attendance rules","internal assessment","internal marks","exam","exams","exam system","end semester","arrear","revaluation","result","academic calendar","class timing",
-"course","courses","ug","pg","department","departments","branches",
-"cse","computer science","it","information technology","ece","eee","mechanical","civil","ai","artificial intelligence","data science","mba","mca",
-"syllabus","curriculum","learning outcomes","outcome based education","obe","project","mini project","final year project","lab","laboratory","practical","hands on training","industrial training","value added course","online learning","nptel","mooc",
-"faculty","faculty members","faculty quality","faculty experience","faculty qualification","mentor","mentorship","faculty support",
-"placement","placements","placement cell","placement training","placement rate","company","companies","recruiters","average package","highest package","internship","internships","resume","mock interview","career","higher studies",
-"library","digital library","computer lab","wifi","internet","auditorium","seminar hall","canteen","gym","medical","sports","yoga","parking",
-"hostel","hostel facilities","hostel rules","warden","hostel accommodation","transport facility","bus routes",
-"student life","clubs","nss","ncc","sports day","fest","symposium","student activities",
-"discipline","rules","uniform","ragging","anti ragging","id card","student portal","bonafide","tc","grievance","counseling","bye",
-"admission","admissions","admission process","eligibility","fees","fee structure","scholarship","counselling","tnea","management quota","government quota",
-]
-
-
-    is_academic = any(word in user_message for word in academic_triggers)
-
-    # ✅ CASE 1: EMOTION + ACADEMIC
-    if emotion != "Neutral 😐" and is_academic:
-        return (
-            f"🧠 Detected Emotion: {emotion}\n"
-            f"📚 Don’t worry, I can help you with academics too 😊"
-        )
-
-    # ✅ CASE 2: EMOTION ONLY (🔥 IMPORTANT FIX 🔥)
+    
+    # Check for academic keywords
+    reply = None
+    for key, response in RESPONSES.items():
+        if key in user_message:
+            reply = response
+            break
+    
+    # Logic Fix: Combine emotion and academic reply
+    if reply:
+        if emotion != "Neutral 😐":
+            return f"🧠 Detected Emotion: {emotion}\n\n{reply}"
+        return reply
+    
     if emotion != "Neutral 😐":
         return f"🧠 Detected Emotion: {emotion}"
 
-    # ================== ACADEMIC RESPONSES ==================
-    responses = {
-"hi": "👋 Hi! Welcome to VEL TECH HIGH TECH College Academic Helpdesk.",
-"hello": "👋 Hello! This is VEL TECH HIGH TECH College AI Academic Assistant.",
-"hey": "😊 Hey! How can I help you with VEL TECH HIGH TECH College today?",
-"good morning": "🌞 Good morning! Welcome to VEL TECH HIGH TECH College Helpdesk.",
-"good afternoon": "🌤️ Good afternoon! How may I assist you at VEL TECH HIGH TECH College?",
-"good evening": "🌙 Good evening! Need any information about VEL TECH HIGH TECH College?",
-"welcome": "🎓 Welcome to VEL TECH HIGH TECH College of Engineering and Technology.",
-"hi there": "👋 Hi there! Ask me anything about VEL TECH HIGH TECH College.",
-"hello there": "✨ Hello there! I’m here to help you with VEL TECH HIGH TECH College details.",
-"hey there": "🙂 Hey there! Looking for information about VEL TECH HIGH TECH College?",
-"greetings": "🤝 Greetings! Welcome to VEL TECH HIGH TECH College Academic Helpdesk.",
-"namaste": "🙏 Namaste! Welcome to VEL TECH HIGH TECH College.",
-"vanakkam": "🙏 Vanakkam! Welcome to VEL TECH HIGH TECH College Academic Assistant.",
-"how are you": "😊 I’m doing great and ready to help you with VEL TECH HIGH TECH College info.",
-"good day": "☀️ Good day! How can I assist you regarding VEL TECH HIGH TECH College?",
-"hi student": "🎓 Hi student! Welcome to VEL TECH HIGH TECH College Helpdesk.",
-"hello student": "📘 Hello student! How can I help you at VEL TECH HIGH TECH College?",
-"hey learner": "📚 Hey learner! Ready to know more about VEL TECH HIGH TECH College?",
-"welcome back": "🎉 Welcome back to VEL TECH HIGH TECH College Academic Helpdesk.",
-"hi friend": "👋 Hi friend! Feel free to ask about VEL TECH HIGH TECH College.",
-"hello friend": "🤗 Hello friend! I’m here to assist you with college information.",
-"hey buddy": "😄 Hey buddy! Need any help related to VEL TECH HIGH TECH College?",
-"hi everyone": "👋 Hi everyone! Welcome to VEL TECH HIGH TECH College Helpdesk.",
-"hello everyone": "📢 Hello everyone! Ask me anything about VEL TECH HIGH TECH College.",
-"good to see you": "😊 Good to see you! How can I help you today?",
-"nice to meet you": "🤝 Nice to meet you! Welcome to VEL TECH HIGH TECH College Helpdesk.",
-"hey champ": "🏆 Hey champ! Ready to explore VEL TECH HIGH TECH College?",
-"hello achiever": "🌟 Hello achiever! Let’s know more about VEL TECH HIGH TECH College.",
-"hi future engineer": "🛠️ Hi future engineer! Welcome to VEL TECH HIGH TECH College.",
-"hello aspirant": "🚀 Hello aspirant! I’m here to guide you about VEL TECH HIGH TECH College.",
-"bye": "👋good bye! feel free to come back for more info about VEL TECH HIGH TECH College.",
+    return RESPONSES["default"]
 
-
- # ---- BASIC INFO ----
- "college": "🏫 VEL TECH HIGH TECH College of Engineering and Technology, Chennai – NAAC A+ accredited, affiliated to Anna University.",
- "vision": "🎯 Vision: To empower students with innovative education and real-world exposure.",
- "mission": "🚀 Mission: To deliver excellence in education, ethics, and employability.",
- "principal": "👨‍🏫 Principal: Dr.E.Kamalanaban, Ph.D., with 28 years of teaching experience.",
- "chairman": "👔 Chairman: Col.Prof.Dr.Vel.Shri.R.Rangarajan – visionary educationist.",
- "attendance": "📅 Minimum 75% attendance required for semester exams.",
- "library": "📚 Library open from 8:00 AM to 8:00 PM with digital access.",
- "placement": "💼 92% placement rate with top recruiters like TCS, Infosys, Zoho.",
- "courses": "🎓 UG & PG programs available including CSE, AI & DS, MBA, MCA.",       
-"college": "🏫 VEL TECH HIGH TECH College of Engineering and Technology, Chennai.",
-"college name": "🏫 The full name is VEL TECH HIGH TECH College of Engineering and Technology.",
-"about college": "🎓 VEL TECH HIGH TECH College is a reputed engineering institution in Chennai.",
-"college overview": "🏫 VEL TECH HIGH TECH College offers quality technical and management education with strong academic standards.",
-"year of establishment": "📅 The college was established in the year 2002.",
-"established": "📅 Established in 2002 with a vision to provide quality education.",
-"college trust": "🏛️ The college is managed by VEL TECH HIGH TECH Educational Trust.",
-"affiliation": "🎓 The college is affiliated to Anna University, Chennai.",
-"university affiliation": "🎓 Permanently affiliated to Anna University.",
-"college code": "🆔 Anna University College Code is 2710.",
-"approval": "📘 Approved by AICTE, New Delhi.",
-"aicte approval": "📘 The college is approved by AICTE.",
-"naac": "🏆 The college is NAAC accredited with A+ grade.",
-"accreditation": "📘 Accredited by NAAC and NBA for selected departments.",
-"nba": "📘 NBA accreditation is available for some engineering departments.",
-"college location": "📍 The college is located at Aavadi, Chennai, Tamil Nadu.",
-"campus location": "📍 Campus situated in Aavadi, Chennai.",
-"campus area": "🌳 The campus is spacious with greenery and modern infrastructure.",
-"college environment": "🌿 The campus provides a peaceful and disciplined learning environment.",
-"college motto": "💡 The motto of the college is ‘Innovation Through Education’.",
-"institution type": "🎓 Self-financing engineering and management institution.",
-"college category": "🏫 Engineering and Technology College.",
-"management": "🏛️ The institution is governed by experienced academic and administrative leaders.",
-"chairman": "👔 Chairman: Col.Prof.Dr.Vel.Shri.R.Rangarajan.",
-"principal": "👨‍🏫 Principal: Dr. E. Kamalanaban, B.E., M.E., Ph.D.",
-"vice chairman": "🎓 Vice Chairman: Dr. Sakunthala Rangarajan.",
-"director": "🏢 Director: Mr. K.V.D. Kishore Kumar.",
-"founder": "🧑‍💼 Founder: Col.Prof.Dr.Vel.Shri.R.Rangarajan.",
-"college vision": "🎯 The vision is to become a center of excellence in education and research.",
-"college mission": "🚀 The mission is to impart quality education and develop skilled professionals.",
-"quality policy": "📘 The institution follows continuous quality improvement practices.",
-"academic reputation": "📚 The college is known for academic discipline and performance.",
-"discipline": "⚖️ The college maintains strict discipline and code of conduct.",
-"infrastructure": "🏗️ The college has modern classrooms, labs, and facilities.",
-"connectivity": "🚌 Well connected by road, college buses, and nearby railway stations.",
-"college buses": "🚌 College transport facility available for students and staff.",
-"student strength": "👨‍🎓 The college has a strong student community across departments.",
-"faculty strength": "👩‍🏫 Experienced and qualified faculty members handle courses.",
-"teaching quality": "📘 Emphasis on quality teaching and student-centric learning.",
-"industry focus": "🏭 The college focuses on industry-relevant education.",
-"placement focus": "💼 Strong focus on training and placements.",
-"research culture": "🔬 Encourages research, innovation, and project-based learning.",
-"campus safety": "🛡️ Safe campus with security and surveillance systems.",
-"college identity": "🏫 VEL TECH HIGH TECH College is known for innovation, discipline, and academic excellence.",
-"about institution": "🎓 The institution aims to shape students into responsible professionals.",
-# ---- ADDITIONAL COLLEGE IDENTITY (NEW) ----
-"college profile": "🏫 VEL TECH HIGH TECH College is a multidisciplinary engineering institution focused on technology-driven education.",
-"institution overview": "🎓 The institution delivers quality higher education with emphasis on innovation and employability.",
-"college background": "📜 The college has grown steadily as a trusted engineering institution in Chennai.",
-"educational standards": "📘 Academic standards are maintained as per Anna University and NAAC guidelines.",
-"learning approach": "🧠 The college follows outcome-based and application-oriented learning.",
-"teaching methodology": "📖 Teaching includes lectures, labs, projects, seminars, and digital tools.",
-"student learning system": "🎓 Learning is supported through continuous assessment and mentoring.",
-"academic framework": "📊 The academic framework is structured and transparent.",
-"college academics": "📚 Academics focus on both theoretical knowledge and practical exposure.",
-"engineering focus": "⚙️ Engineering programs emphasize real-world problem solving.",
-"technology orientation": "💻 Courses are aligned with emerging technologies.",
-"career readiness": "🎯 Students are prepared for placements and higher studies.",
-"academic mentoring system": "👨‍🏫 Faculty mentors guide students throughout their academic journey.",
-"student guidance": "🤝 Academic and career guidance is provided regularly.",
-"learning support": "📘 Remedial classes are available for academic improvement.",
-"faculty mentoring": "👩‍🏫 Faculty act as academic and professional mentors.",
-"academic planning": "📅 Academic plans are prepared semester-wise.",
-"semester structure": "🗓️ Each semester follows a planned academic schedule.",
-"continuous evaluation": "📊 Students are evaluated continuously through tests and assignments.",
-"academic monitoring": "📈 Student progress is monitored regularly.",
-"student performance": "🎓 Performance tracking helps improve academic outcomes.",
-"skill-based education": "🛠️ Skill-based learning is integrated into academics.",
-"communication skills": "🗣️ Emphasis on communication and presentation skills.",
-"technical exposure": "💡 Technical exposure through labs and projects.",
-"project orientation": "🔬 Mini and major projects encouraged in all departments.",
-"innovation mindset": "🚀 Innovation and creativity are encouraged among students.",
-"research exposure": "📖 Students are introduced to research fundamentals.",
-"academic discipline": "⚖️ Strict academic discipline is maintained.",
-"classroom culture": "🏫 Classrooms promote interactive learning.",
-"student engagement": "🎓 Students actively participate in academic activities.",
-"digital classrooms": "🖥️ Smart classrooms enhance teaching effectiveness.",
-"e-learning support": "💻 Online resources support student learning.",
-"lab-based learning": "🧪 Practical sessions strengthen technical skills.",
-"hands-on training": "🛠️ Hands-on training is part of curriculum.",
-"industry relevance": "🏭 Curriculum aligned with industry expectations.",
-"professional preparation": "👔 Students are trained for professional environments.",
-"career development": "📈 Career development is a continuous process.",
-"placement preparation": "💼 Placement training starts from early semesters.",
-"student employability": "🎯 Focus on employability and career success.",
-"academic integrity": "📘 Integrity and honesty are core academic values.",
-"ethical education": "⚖️ Ethics are integrated into learning process.",
-"value-based learning": "🌱 Education focuses on values and responsibility.",
-"student responsibility": "👨‍🎓 Students are encouraged to be disciplined and responsible.",
-"college culture": "🎓 A culture of learning, respect, and discipline.",
-"academic excellence focus": "⭐ Continuous focus on academic excellence.",
-"institutional growth": "📈 The institution continues to grow academically and professionally.",
-"college recognition": "🏆 Recognized for consistent academic performance.",
-"academic consistency": "📚 Consistent academic results maintained.",
-"student-centered approach": "🤝 Teaching is student-centered and supportive.",
-"academic support services": "📘 Academic support services are available for students.",
-"college mission focus": "🚀 All activities align with institutional mission.",
-"educational commitment": "🎓 Committed to quality education and student success.",
-"learning outcomes": "📊 Focus on measurable learning outcomes.",
-"student achievement": "🏅 Students achieve academic and career milestones.",
-"college credibility": "🏫 Trusted institution under Anna University framework.",
-"institution reliability": "📘 Reliable academic system and governance.",
-"future-focused education": "🚀 Education prepares students for future challenges.",
-"professional excellence": "👔 Aims to produce professionally competent graduates.",
-"academic environment": "🌿 Academic environment promotes focus and growth.",
-"institution identity": "🏫 VEL TECH HIGH TECH College stands for discipline, learning, and innovation.",
-
-        # ---- DEFAULT ----
-        "default": "🤖 Sorry, I didn’t get that. Try asking about courses, faculty, placements, or admissions!",
-    
-    # ---- COLLEGE OVERVIEW ----
-"college overview": "🏫 VEL TECH HIGH TECH College of Engineering and Technology is a premier institution in Chennai offering quality technical and management education with strong industry exposure.",
-"about college": "🎓 VEL TECH HIGH TECH College, established in 2002, focuses on academic excellence, innovation, and holistic student development.",
-"college details": "📘 VEL TECH HIGH TECH College is affiliated to Anna University, approved by AICTE, and accredited by NAAC with A+ grade.",
-"why choose this college": "⭐ This college offers excellent academics, experienced faculty, strong placements, modern labs, and a student-friendly campus.",
-"college reputation": "🏆 The college is well known for discipline, placement support, and consistent academic performance.",
-"departments": "🏛️ Departments include CSE, IT, ECE, EEE, Mechanical, Civil, AI & DS, MBA, MCA, Biomedical, and Science & Humanities.",
-"cse": "💻 Computer Science & Engineering focuses on programming, AI, data science, and software development.",
-"it": "🖥️ Information Technology focuses on networks, databases, and web technologies.",
-"ece": "📡 Electronics & Communication Engineering focuses on communication systems and embedded technologies.",
-"eee": "⚡ Electrical & Electronics Engineering focuses on power systems and automation.",
-"mechanical": "🔧 Mechanical Engineering focuses on design, manufacturing, and thermal engineering.",
-"civil": "🏗️ Civil Engineering focuses on construction, structural, and environmental engineering.",
-"ai": "🤖 Artificial Intelligence & Data Science focuses on machine learning, deep learning, and analytics.",
-"mba": "💼 MBA focuses on HR, Marketing, Finance, and Business Analytics.",
-"mca": "🧑‍💻 MCA focuses on advanced software development and applications.",
-# ---- COLLEGE OVERVIEW (EXTRA – NEW) ----
-"institution summary": "🏫 VEL TECH HIGH TECH College is a well-established engineering institution known for structured academics and career-oriented education.",
-"college introduction": "🎓 The college provides a balanced blend of theoretical knowledge and practical learning.",
-"college profile overview": "📘 VEL TECH HIGH TECH College emphasizes discipline, innovation, and professional growth.",
-"institution background": "📜 With over two decades of experience, the college has built a strong academic foundation.",
-"college highlights": "⭐ Key highlights include strong faculty, modern infrastructure, and placement-driven training.",
-"academic framework": "📊 The academic system follows Anna University regulations with continuous assessment.",
-"education quality": "📚 The institution maintains high standards in teaching and evaluation.",
-"learning culture": "🧠 A structured learning culture supports academic consistency.",
-"campus academics": "🏫 Academics are supported by smart classrooms and well-equipped laboratories.",
-"college strengths": "💪 Strong discipline, mentoring system, and academic monitoring are core strengths.",
-"institution focus": "🎯 Focused on producing skilled, ethical, and industry-ready graduates.",
-"college environment overview": "🌿 The campus environment supports focused learning and personal growth.",
-"academic support": "📘 Academic support is provided through mentoring and remedial classes.",
-"student-centric education": "🤝 Teaching approaches are student-centric and outcome-based.",
-"career-oriented education": "💼 Education is aligned with career and industry expectations.",
-"professional learning": "👔 Students are trained to adapt to professional work environments.",
-"technology-driven learning": "💻 Technology-enabled teaching enhances learning effectiveness.",
-"institution credibility": "🏆 Recognized as a reliable institution under Anna University framework.",
-"college vision focus": "🎯 The institution aims to continuously improve academic and research quality.",
-"overall college identity": "🏫 VEL TECH HIGH TECH College stands for academic discipline and career readiness.",
-
-# ---- DEPARTMENTS (EXTRA – NEW) ----
-"department overview": "🏛️ Each department operates with dedicated faculty, labs, and academic planning.",
-"engineering departments": "⚙️ Engineering departments emphasize practical and application-based learning.",
-"management department": "💼 Management studies focus on leadership, decision-making, and business skills.",
-"computer-related departments": "💻 Computing departments focus on programming, data, and emerging technologies.",
-"core engineering branches": "🔧 Core branches focus on strong fundamentals and industrial relevance.",
-"interdisciplinary learning": "🔄 Departments promote interdisciplinary projects and learning.",
-"department facilities": "🧪 Each department has specialized laboratories and resources.",
-"department faculty": "👩‍🏫 Departments are handled by experienced and qualified faculty members.",
-"department mentoring": "🤝 Students receive academic guidance from department mentors.",
-"department activities": "📅 Departments conduct seminars, workshops, and technical events.",
-"technical departments": "⚙️ Technical departments emphasize hands-on training and labs.",
-"research in departments": "🔬 Departments encourage research and mini-projects.",
-"student projects": "💡 Department-level projects enhance problem-solving skills.",
-"department innovation": "🚀 Innovation and creativity are promoted at department level.",
-"department discipline": "⚖️ Departments maintain academic discipline and standards.",
-"department coordination": "📊 Departments coordinate academic planning and assessments.",
-"departmental learning": "📘 Learning is structured through syllabus, labs, and evaluations.",
-"departmental exposure": "🏭 Industry exposure is encouraged through internships and visits.",
-"departmental growth": "📈 Departments continuously update curriculum practices.",
-"department excellence": "🏅 Departments strive for academic and professional excellence.",
-
-# ---- COURSE DELIVERY (EXTRA) ----
-"course delivery method": "📖 Courses are delivered through lectures, labs, and project work.",
-"practical learning": "🧪 Practical sessions strengthen subject understanding.",
-"theory and lab balance": "⚖️ Equal importance is given to theory and laboratory work.",
-"semester-wise learning": "🗓️ Learning objectives are planned semester-wise.",
-"course outcomes": "🎯 Each course is designed with clear learning outcomes.",
-"evaluation pattern": "📊 Evaluation includes internal tests, assignments, and exams.",
-"academic continuity": "📚 Continuous evaluation ensures steady academic progress.",
-"student assessment": "🧮 Assessments help identify strengths and improvement areas.",
-"course relevance": "💡 Courses are updated to meet industry trends.",
-"skill integration": "🛠️ Skill development is integrated into course delivery.",
-# ---- LOCATION & CAMPUS ----
-"college location": "📍 The college is located at Aavadi, Chennai, with easy access via bus and train.",
-"campus size": "🌳 The campus spans over 25 acres with greenery and modern infrastructure.",
-"campus facilities": "🏫 The campus includes smart classrooms, advanced labs, hostels, sports facilities, and Wi-Fi connectivity.",
-"green campus": "🌱 The college promotes eco-friendly practices like solar power, rainwater harvesting, and tree plantation.",
-"campus environment": "🍃 The campus provides a peaceful and student-friendly learning environment.",
-# ---- LOCATION & CAMPUS (EXTRA – NEW) ----
-"campus overview": "🏫 The college campus is designed to support academics, research, and student life in a balanced manner.",
-"college surroundings": "🌿 The surroundings of the campus are calm, safe, and suitable for focused learning.",
-"campus accessibility": "🚌 The campus is easily accessible through public transport and college bus services.",
-"transport connectivity": "🚍 Multiple transport options connect the campus to major parts of Chennai.",
-"college transport facility": "🚌 The institution operates a fleet of buses for students and staff.",
-"campus entry security": "🛡️ Entry points are monitored to ensure campus safety.",
-"campus safety system": "🔒 The campus has CCTV surveillance and security personnel.",
-"hostel location": "🏠 Hostels are located within the campus for easy access to academic blocks.",
-"residential facilities": "🏡 On-campus residential facilities ensure convenience and safety.",
-"academic blocks": "🏢 Academic blocks are well-planned with classrooms and laboratories.",
-"laboratory blocks": "🧪 Dedicated laboratory blocks support practical learning.",
-"campus walkways": "🚶 Green walkways connect different blocks inside the campus.",
-"campus cleanliness": "🧹 The campus is maintained with high standards of cleanliness.",
-"open spaces": "🌳 Open spaces and greenery enhance the campus atmosphere.",
-"campus planning": "📐 The campus is systematically planned for smooth movement and safety.",
-"campus infrastructure quality": "🏗️ Infrastructure supports modern teaching and learning needs.",
-"learning atmosphere": "📘 The campus atmosphere supports disciplined and focused learning.",
-"quiet study environment": "📚 The environment supports concentration and academic productivity.",
-"student relaxation areas": "🌴 Designated areas are available for student relaxation.",
-"campus discipline environment": "⚖️ The campus follows strict discipline policies.",
-"college locality": "📍 The college is located in a well-developed educational zone.",
-"urban connectivity": "🌆 The campus has good connectivity to city facilities.",
-"campus emergency support": "🚑 Emergency and medical support is available on campus.",
-"campus navigation": "🗺️ Clear signage helps easy navigation inside the campus.",
-"eco campus initiative": "🌱 Environmental sustainability is actively practiced.",
-"campus sustainability": "🔆 Sustainable energy and water practices are followed.",
-"natural surroundings": "🍃 Natural greenery supports a healthy campus environment.",
-"campus development": "🏗️ Continuous infrastructure development improves facilities.",
-"campus maintenance": "🧰 Regular maintenance ensures quality infrastructure.",
-"student-friendly campus": "🎓 The campus is designed keeping student comfort in mind.",
-"academic focus zone": "📘 Academic zones are separated from recreational areas.",
-"campus ambience": "🌿 The campus ambience promotes calm and positivity.",
-"college neighborhood": "🏘️ The surrounding area is safe and student-friendly.",
-"campus expansion": "📈 The campus continues to expand with new facilities.",
-"campus planning committee": "📊 Campus planning ensures efficient use of space.",
-"campus design": "🏫 Campus design balances academics, greenery, and utilities.",
-"campus connectivity inside": "🚶 Smooth internal roads connect all campus blocks.",
-"college campus identity": "🏫 The campus reflects discipline, order, and academic focus.",
-
-# ---- ACCREDITATION & AFFILIATION ----
-"naac grade": "📘 The college is accredited by NAAC with A+ grade.",
-"aiicte approval": "✅ The institution is approved by AICTE, New Delhi.",
-"anna university affiliation": "🎓 The college is affiliated to Anna University, Chennai.",
-"nba accreditation": "🏅 Several departments are accredited by NBA ensuring quality education.",
-"college code": "🆔 Anna University College Code is 2710.",
-# ---- ACCREDITATION & AFFILIATION (EXTRA – NEW) ----
-"quality assurance system": "📘 The institution follows a structured quality assurance framework as per national standards.",
-"academic accreditation": "🏆 Accreditations ensure the quality and credibility of academic programs.",
-"institutional recognition": "🎖️ The college is recognized by statutory educational authorities.",
-"regulatory compliance": "📑 The institution strictly complies with AICTE and university regulations.",
-"university regulations": "📘 Academic operations follow Anna University norms and guidelines.",
-"national accreditation status": "🏅 National-level accreditations reflect academic quality.",
-"department accreditation status": "📊 Selected departments undergo periodic accreditation reviews.",
-"quality evaluation": "🔍 Quality is evaluated through audits and academic reviews.",
-"institutional audits": "📋 Internal and external audits ensure academic standards.",
-"quality improvement process": "📈 Continuous improvement processes are implemented across departments.",
-"iqac framework": "📊 The Internal Quality Assurance Cell (IQAC) monitors academic excellence.",
-"quality benchmarks": "🎯 Academic benchmarks are aligned with national standards.",
-"program evaluation": "📘 Academic programs are periodically evaluated for relevance.",
-"curriculum compliance": "📚 Curriculum complies with university and accreditation norms.",
-"assessment standards": "🧮 Student assessment follows standardized evaluation methods.",
-"teaching quality assurance": "👩‍🏫 Teaching quality is maintained through regular reviews.",
-"academic governance": "⚙️ Governance structures support accreditation requirements.",
-"compliance monitoring": "📑 Compliance is monitored through structured processes.",
-"accreditation benefits": "⭐ Accreditations enhance student confidence and institutional credibility.",
-"recognized institution": "🏫 The college operates as a recognized higher education institution.",
-"university-approved programs": "🎓 All programs are approved under university affiliation.",
-"institution legitimacy": "📘 Accreditation ensures institutional legitimacy.",
-"academic credibility": "🏆 Strong accreditation supports academic credibility.",
-"quality certification": "📜 Certification validates institutional quality.",
-"education standards compliance": "📊 Education standards are aligned with national policies.",
-"statutory approvals": "✅ All statutory approvals are maintained.",
-"academic standardization": "📘 Standardized academic processes ensure consistency.",
-"institutional accountability": "⚖️ Accountability mechanisms support accreditation norms.",
-"academic transparency": "🔍 Transparent academic and evaluation processes are followed.",
-
-# ---- ACADEMICS ----
-"academic excellence": "📚 The college maintains high academic standards with continuous assessment and mentoring.",
-"teaching methodology": "🧠 Teaching includes smart classrooms, project-based learning, and industry-oriented training.",
-"internal assessment": "📝 Internal assessments include cycle tests, assignments, and seminars.",
-"semester system": "🗓 The college follows Anna University semester system (Odd & Even).",
-"attendance rules": "📊 Students must maintain minimum 75% attendance to appear for exams.",
-"academic calendar": "📅 Academic calendar follows Anna University schedule.",
-"attendance": "🕒 Minimum 75% attendance is required for semester exams.",
-"class timing": "🕘 Class timing is generally from 8:30 AM to 3:30 PM.",
-"semester system": "🗓️ The college follows semester-based CBCS system.",
-"internal assessment": "📊 Internal assessments include tests, assignments, seminars, and lab work.",
-"exam system": "🧾 End semester exams are conducted by Anna University.",
-"result": "📢 Results are published on Anna University COE portal.",
-"arrear exams": "♻️ Arrear exams are conducted along with regular exams.",
-"revaluation": "🔍 Revaluation and photocopy options are available after result declaration.",
-# ---- ACADEMICS (EXTRA – NEW) ----
-"academic framework": "📘 The academic framework is designed to balance theory, practicals, and skill development.",
-"curriculum design": "📚 Curriculum is periodically updated as per Anna University regulations and industry trends.",
-"choice based credit system": "🧮 The college follows CBCS allowing students to choose electives based on interests.",
-"outcome based education": "🎯 Academic delivery follows Outcome Based Education (OBE) principles.",
-"learning outcomes": "📊 Each course is mapped with clear learning outcomes and objectives.",
-"course planning": "🗂️ Faculty prepare detailed course plans at the beginning of each semester.",
-"lesson planning": "📝 Structured lesson plans ensure syllabus completion on time.",
-"academic monitoring": "🔍 Academic progress is continuously monitored by mentors and HODs.",
-"student mentoring": "👩‍🏫 Each student is assigned a mentor for academic guidance and support.",
-"slow learner support": "🧑‍🎓 Special coaching is provided for slow learners.",
-"advanced learner support": "🚀 Advanced learners are encouraged through research and competitive activities.",
-"remedial classes": "📘 Remedial classes are conducted for academically weaker students.",
-"tutorial sessions": "🧠 Tutorial sessions help students clarify difficult concepts.",
-"laboratory learning": "🧪 Labs focus on hands-on learning and real-time experimentation.",
-"practical evaluation": "⚙️ Practical exams assess both skill and conceptual understanding.",
-"project based learning": "💡 Students work on mini and major projects as part of curriculum.",
-"industry oriented courses": "🏭 Industry-oriented courses enhance employability skills.",
-"value added courses": "📜 Value-added certification courses are offered beyond syllabus.",
-"online learning support": "💻 Online platforms like NPTEL and MOOCs support academics.",
-"blended learning": "🔄 Blended learning combines classroom and online education.",
-"academic audits": "📋 Internal academic audits ensure teaching quality.",
-"faculty development programs": "👩‍🏫 Faculty attend FDPs to improve teaching effectiveness.",
-"academic review meetings": "📊 Periodic review meetings track syllabus and performance.",
-"student performance analysis": "📈 Student results are analyzed to improve outcomes.",
-"question paper standards": "📝 Question papers follow university blueprint standards.",
-"evaluation transparency": "🔍 Transparent evaluation practices are maintained.",
-"continuous improvement": "📈 Academic processes are improved every semester.",
-"learning resources": "📚 Students are supported with notes, PPTs, and e-resources.",
-"academic discipline": "⚖️ Academic discipline is strictly maintained.",
-"innovation in teaching": "💡 Innovative teaching methods enhance understanding.",
-"case study approach": "📑 Case studies are used for practical exposure.",
-"seminar presentations": "🎤 Students present seminars to improve communication skills.",
-"academic integrity": "🛡️ Academic honesty and integrity are strongly enforced.",
-"exam preparedness": "🧠 Students are trained for exam strategies and time management.",
-"question bank support": "📘 Question banks help students prepare for exams.",
-"revision classes": "🔁 Revision classes are conducted before exams.",
-"internal marks policy": "📊 Internal marks follow university norms.",
-"academic counseling": "💬 Academic counseling helps students improve performance.",
-"course outcome attainment": "🎯 Course outcome attainment is regularly measured.",
-"program outcome mapping": "📊 Program outcomes are mapped with graduate attributes.",
-"student feedback system": "🗣️ Student feedback helps improve academic delivery.",
-"academic excellence culture": "🏆 A strong culture of academic excellence is promoted.",
-"learning environment": "📘 The learning environment encourages curiosity and growth.",
-
-# ---- FACULTY ----
-"faculty quality": "👩‍🏫 The college has highly qualified and experienced faculty members.",
-"faculty experience": "📖 Many faculty members have over 10+ years of teaching and research experience.",
-"faculty qualification": "🎓 Most faculty members hold Ph.D. or are pursuing doctoral research.",
-"mentorship system": "🤝 Each student is assigned a mentor for academic and personal guidance.",
-"faculty support": "💬 Faculty are approachable and provide continuous academic support.",
-# ---- FACULTY (EXTRA – NEW) ----
-"faculty expertise": "🧠 Faculty members possess strong subject expertise and domain knowledge.",
-"faculty research background": "🔬 Many faculty members actively engage in research and publications.",
-"faculty industry exposure": "🏭 Several faculty members have prior industry experience.",
-"faculty development": "📘 Faculty regularly attend FDPs, workshops, and conferences.",
-"faculty training programs": "🧑‍🏫 Training programs are conducted to enhance teaching effectiveness.",
-"faculty teaching style": "🎯 Teaching focuses on concept clarity and application-based learning.",
-"faculty involvement": "🤝 Faculty actively involve students in academic and co-curricular activities.",
-"faculty-student interaction": "💬 Open interaction between faculty and students is encouraged.",
-"faculty guidance": "📚 Faculty guide students in academics, projects, and career planning.",
-"project mentors": "💡 Faculty act as mentors for mini and final-year projects.",
-"research supervisors": "🔍 Recognized faculty supervise research scholars and PG projects.",
-"faculty evaluation": "📊 Faculty performance is reviewed through feedback and audits.",
-"faculty feedback system": "🗣️ Student feedback helps improve teaching quality.",
-"faculty commitment": "🏆 Faculty are committed to student success and learning outcomes.",
-"faculty accessibility": "📍 Faculty are available during working hours for student support.",
-"academic advisors": "👨‍🏫 Faculty serve as academic advisors for students.",
-"faculty coordination": "⚙️ Strong coordination among faculty ensures syllabus completion.",
-"faculty mentoring programs": "🤝 Structured mentoring programs support student development.",
-"faculty leadership": "🏅 Senior faculty members lead academic initiatives and reforms.",
-"faculty innovation": "💡 Innovative teaching methods are adopted by faculty.",
-"faculty professionalism": "⚖️ Faculty maintain professionalism and ethical standards.",
-"faculty collaboration": "🤝 Faculty collaborate with industries and institutions.",
-"faculty contribution": "📘 Faculty contribute to curriculum development and quality improvement.",
-"faculty recognition": "🏆 Faculty members receive awards and recognition for excellence.",
-"faculty academic support": "📚 Faculty provide notes, materials, and guidance beyond class hours.",
-"faculty exam preparation support": "📝 Faculty help students prepare for exams effectively.",
-"faculty counseling role": "💬 Faculty support students academically and emotionally.",
-"faculty research guidance": "🔬 Faculty guide students in research methodology.",
-"faculty skill development": "🛠️ Faculty focus on developing technical and soft skills.",
-"faculty engagement": "🎓 Faculty actively engage in academic planning and reviews.",
-"faculty teaching excellence": "🌟 Teaching excellence is a core strength of the faculty team.",
-"faculty student motivation": "🚀 Faculty motivate students to achieve academic goals.",
-"faculty classroom management": "📘 Effective classroom management ensures focused learning.",
-"faculty academic integrity": "🛡️ Faculty uphold academic honesty and discipline.",
-"faculty learning support": "📚 Continuous learning support is provided by faculty.",
-"faculty academic culture": "🏫 Faculty promote a strong academic culture on campus.",
-
-# ---- PLACEMENTS ----
-"placement support": "💼 The Training & Placement Cell provides strong placement assistance.",
-"placement training": "🧠 Students receive aptitude, technical, and soft skill training.",
-"top companies": "🏢 Top recruiters include TCS, Infosys, Wipro, Zoho, Accenture, and HCL.",
-"placement percentage": "📈 The college records over 90% placement every year.",
-"career opportunities": "🚀 The college prepares students for jobs, higher studies, and entrepreneurship.",
-"placement cell": "🎯 Dedicated Training & Placement Cell.",
-"placement": "💼 The college maintains excellent placement records.",
-"placement rate": "📈 Placement rate is above 90%.",
-"top recruiters": "🏢 TCS, Infosys, Wipro, Cognizant, Zoho, Accenture, HCL, Capgemini.",
-"average package": "💰 Average salary package is around ₹4 LPA.",
-"highest package": "🏆 Highest package exceeds ₹10 LPA.",
-"internship": "👨‍💻 Internships are encouraged and supported by the college.",
-"training": "📘 Placement training includes aptitude, soft skills, and technical sessions.",
-# ---- PLACEMENTS (EXTRA – NEW) ----
-"training and placement department": "🎯 The Training and Placement Department bridges students with industry opportunities.",
-"placement preparation": "🧠 Students are trained from second year onwards for placement readiness.",
-"career readiness programs": "🚀 Career readiness programs focus on skills, attitude, and professionalism.",
-"mock interviews": "🎤 Mock interviews are conducted by industry experts and faculty.",
-"group discussion training": "🗣️ Group discussion sessions improve communication and confidence.",
-"resume preparation": "📄 Students are guided in preparing professional resumes.",
-"placement orientation": "📘 Placement orientation sessions are conducted for final-year students.",
-"industry interaction": "🤝 Regular interaction with industry professionals enhances placement chances.",
-"placement drives": "🏢 On-campus and off-campus placement drives are conducted regularly.",
-"pre-placement talks": "🎙️ Pre-placement talks help students understand company expectations.",
-"placement eligibility": "📊 Eligibility criteria are clearly communicated to students.",
-"placement coordination": "⚙️ Coordinators ensure smooth conduct of placement activities.",
-"career counseling": "🧭 Career counseling helps students choose suitable career paths.",
-"higher studies guidance": "🎓 Guidance is provided for higher studies like GATE, GRE, and CAT.",
-"entrepreneurship support": "🚀 Students interested in startups receive entrepreneurship guidance.",
-"internship-to-placement": "🔗 Internships often lead to pre-placement offers.",
-"industrial training": "🏭 Industrial training programs enhance real-world exposure.",
-"skill development programs": "🛠️ Skill development programs improve employability.",
-"communication skills training": "🗣️ Special focus on communication and presentation skills.",
-"technical skill enhancement": "💻 Technical skill enhancement through workshops and bootcamps.",
-"placement performance": "📈 Placement performance improves every academic year.",
-"student placement success": "🏆 Many students secure placements in reputed organizations.",
-"alumni placement support": "🤝 Alumni network supports placement and career guidance.",
-"placement tracking": "📊 Placement statistics are tracked and analyzed annually.",
-"corporate partnerships": "🏢 Corporate partnerships strengthen placement opportunities.",
-"industry tie-ups": "🤝 Industry tie-ups support internships and placements.",
-"placement awareness sessions": "📘 Awareness sessions keep students informed about opportunities.",
-"placement motivation programs": "💪 Motivation sessions boost student confidence.",
-"placement readiness assessment": "📋 Readiness assessments evaluate student preparedness.",
-"career development cell": "🎯 Career Development Cell supports long-term career planning.",
-"job role guidance": "📌 Guidance provided on job roles and career growth.",
-"placement ethics": "⚖️ Transparent and ethical placement processes are followed.",
-"placement infrastructure": "🏫 Dedicated halls and facilities for placement activities.",
-"student employability focus": "🚀 Focus on improving overall employability of students.",
-"placement success stories": "🌟 Success stories inspire juniors for career preparation.",
-"placement continuous improvement": "📈 Placement strategies are continuously improved.",
-
-# ---- HOSTEL & TRANSPORT ----
-"hostel facilities": "🏠 Separate hostels for boys and girls with Wi-Fi, security, and mess facilities.",
-"hostel safety": "🛡️ Hostels are secured with wardens and CCTV surveillance.",
-"transport facilities": "🚌 College buses cover major areas of Chennai and nearby districts.",
-"bus routes": "🗺️ Bus routes are available across Chennai suburbs for student convenience.",
-# ---- HOSTEL & TRANSPORT (EXTRA – NEW) ----
-"hostel accommodation": "🏠 Hostel accommodation is available for both UG and PG students.",
-"hostel rooms": "🛏️ Hostels offer well-furnished rooms with adequate ventilation.",
-"hostel mess": "🍽️ Hostel mess provides hygienic and nutritious food.",
-"hostel discipline": "⚖️ Hostel rules ensure discipline and a safe living environment.",
-"hostel timings": "⏰ Hostel entry and exit timings are strictly followed.",
-"hostel facilities overview": "🏢 Hostels include study halls, recreation areas, and common rooms.",
-"hostel maintenance": "🧹 Regular maintenance ensures cleanliness and hygiene.",
-"hostel medical support": "🏥 Medical assistance is available for hostel students.",
-"hostel wifi access": "📶 Wi-Fi connectivity is provided inside hostels for academic use.",
-"hostel grievance system": "📬 Hostel-related issues can be reported to wardens.",
-"warden supervision": "👩‍🏫 Wardens monitor hostel activities and student welfare.",
-"hostel environment": "🌿 Hostels provide a calm and student-friendly environment.",
-"hostel allocation": "📋 Hostel rooms are allotted based on availability and guidelines.",
-"hostel security staff": "🛡️ Security personnel are deployed round-the-clock in hostels.",
-"hostel visitor policy": "🚫 Visitor access is regulated for student safety.",
-"transport overview": "🚌 College transport ensures safe and timely travel for students.",
-"college bus facility": "🚌 Dedicated college buses operate on fixed schedules.",
-"bus timing": "⏰ Bus timings are planned to match class schedules.",
-"transport safety": "🛡️ Transport services follow safety and discipline norms.",
-"bus tracking": "📍 Bus routes and timings are informed to students regularly.",
-"bus availability": "🚌 Transport facility is available for students and staff.",
-"transport coordination": "⚙️ Transport office manages routes and operations efficiently.",
-"bus fee": "💰 Transport fees depend on distance and route.",
-"transport convenience": "🚍 College buses provide comfortable daily commuting.",
-"transport discipline": "⚖️ Students must follow transport rules and timings.",
-"bus driver support": "👨‍✈️ Experienced drivers ensure safe transportation.",
-"transport coverage": "🗺️ Bus services cover major city and suburban areas.",
-"transport punctuality": "⏱️ Punctuality is strictly maintained in transport operations.",
-"transport management": "📘 Transport system is well-organized and monitored.",
-"bus seating": "🪑 Adequate seating is provided in college buses.",
-"transport assistance": "📞 Transport office assists students with route queries.",
-"hostel & transport coordination": "🔗 Hostel and transport facilities work together for student convenience.",
-
-# ---- STUDENT LIFE ----
-"student activities": "🎭 Students actively participate in cultural, technical, and sports events.",
-"clubs and societies": "🎨 The college has coding, robotics, NSS, NCC, and cultural clubs.",
-"college events": "🎉 Annual technical symposiums and cultural fests are conducted.",
-"sports facilities": "⚽ The campus offers indoor and outdoor sports facilities.",
-"student discipline": "🧑‍🎓 The college maintains strong discipline and ethical values.",
-"student life": "🎓 Student life includes academics, clubs, sports, and cultural activities.",
-"clubs": "🎭 Coding Club, Robotics Club, NSS, NCC, Cultural Club, Sports Club.",
-"fest": "🎉 Annual technical and cultural festivals are conducted.",
-"symposium": "💡 Department symposiums, hackathons, and workshops are organized.",
-"nss": "🌱 NSS conducts social service and community development activities.",
-"ncc": "🎖️ NCC develops leadership, discipline, and patriotism.",
-"sports day": "🏅 Annual Sports Day encourages physical fitness and teamwork.",
-# ---- STUDENT LIFE (EXTRA – NEW) ----
-"student engagement": "🤝 The college encourages active student engagement beyond classrooms.",
-"campus culture": "🏫 Campus culture promotes discipline, inclusiveness, and teamwork.",
-"co-curricular activities": "🎯 Co-curricular activities help students develop leadership and confidence.",
-"extra curricular activities": "🎨 Extra-curricular activities support creativity and talent development.",
-"technical clubs": "💻 Technical clubs organize coding contests, hackathons, and workshops.",
-"cultural exposure": "🎭 Cultural events provide a platform for artistic expression.",
-"leadership opportunities": "🏆 Students get leadership roles through clubs and committees.",
-"student committees": "🧑‍🎓 Students actively participate in academic and event committees.",
-"peer learning": "🤝 Peer learning helps students grow together academically and socially.",
-"student representation": "🗳️ Student representatives voice student concerns and suggestions.",
-"student motivation": "🚀 Motivational programs inspire students to achieve goals.",
-"teamwork culture": "🤝 Teamwork is encouraged through group activities and projects.",
-"personality development": "🌟 Programs focus on personality and confidence building.",
-"communication skills development": "🗣️ Activities enhance communication and presentation skills.",
-"creative talents": "🎨 Students showcase talents in music, dance, drama, and arts.",
-"inter-college participation": "🏆 Students participate in inter-college competitions and events.",
-"student achievements": "🏅 Students achieve recognition in academics, sports, and cultural events.",
-"student wellness": "💚 The college supports student physical and mental well-being.",
-"campus harmony": "🌈 A harmonious campus environment promotes mutual respect.",
-"student safety": "🛡️ Student safety is ensured through strict rules and monitoring.",
-"ethical values": "⚖️ Ethical values are strongly instilled among students.",
-"discipline culture": "📘 Discipline is an integral part of student life.",
-"balanced student life": "⚖️ Students maintain balance between academics and activities.",
-"student participation": "🙌 Active participation is encouraged in all campus initiatives.",
-"event coordination": "🎤 Students assist in organizing college events.",
-"social responsibility": "🌱 Students are encouraged to participate in social service.",
-"community involvement": "🤲 Community outreach programs build social awareness.",
-"student innovation": "💡 Students are encouraged to think innovatively.",
-"student confidence building": "🚀 Campus activities boost student confidence.",
-"holistic development": "🎓 Student life focuses on holistic development.",
-"positive campus atmosphere": "🌟 The campus atmosphere supports learning and growth.",
-"student collaboration": "🤝 Collaboration among students is encouraged.",
-"student creativity": "🎨 Creativity is nurtured through clubs and activities.",
-"student growth opportunities": "📈 Campus provides opportunities for personal growth.",
-"student participation culture": "🏫 Active participation is part of campus culture.",
-"student involvement programs": "🎯 Programs are designed to involve students actively.",
-"student networking": "🤝 Students build networks through events and clubs.",
-"student learning beyond class": "📚 Learning extends beyond classrooms through activities.",
-
-# ---- SAFETY & SUPPORT ----
-"student safety": "🛡️ The campus ensures student safety with 24/7 security and CCTV.",
-"anti ragging": "🚫 The college strictly follows anti-ragging policies.",
-"medical facilities": "🏥 On-campus medical center provides immediate healthcare support.",
-"grievance cell": "📬 Students can raise concerns through the grievance redressal cell.",
-"student support services": "🎓 Dedicated support for academics, counseling, and career guidance.",
-# ---- SAFETY & SUPPORT (EXTRA – NEW) ----
-"campus security system": "🛡️ The campus security system operates round-the-clock.",
-"security personnel": "👮 Trained security staff monitor the campus at all times.",
-"cctv surveillance": "📹 CCTV cameras cover all major campus locations.",
-"emergency response": "🚨 Emergency response mechanisms ensure quick assistance.",
-"health support services": "🏥 Health support services are available during working hours.",
-"first aid facility": "🩹 First aid is available across campus for emergencies.",
-"medical emergency support": "🚑 Tie-ups with nearby hospitals ensure emergency care.",
-"student counseling": "🧠 Professional counseling support is available for students.",
-"mental health support": "💚 Mental health awareness and support programs are conducted.",
-"women safety cell": "👩‍🦰 Women safety cell ensures a secure environment.",
-"anti-ragging committee": "🚫 Anti-ragging committee actively monitors campus activities.",
-"disciplinary committee": "⚖️ Disciplinary committee enforces code of conduct.",
-"student grievance mechanism": "📬 Transparent grievance resolution mechanism is followed.",
-"complaint handling system": "📋 Complaints are handled confidentially and promptly.",
-"student welfare committee": "🤝 Student welfare committee addresses student needs.",
-"student protection policy": "📘 Policies are in place to protect student rights.",
-"confidential support": "🔒 Student issues are handled with confidentiality.",
-"campus monitoring": "📡 Campus areas are continuously monitored.",
-"emergency contact system": "📞 Emergency contact numbers are displayed across campus.",
-"health awareness programs": "🧠 Health and wellness programs promote student well-being.",
-"medical checkups": "🩺 Periodic medical checkups are conducted.",
-"safety drills": "🚒 Safety drills prepare students for emergencies.",
-"student assistance desk": "🎓 Student assistance desk supports daily concerns.",
-"student help services": "📘 Help services assist students with academic and non-academic issues.",
-"support during emergencies": "🚨 Immediate support is provided during emergencies.",
-"secure campus environment": "🌟 A secure and disciplined campus environment is maintained.",
-"student rights protection": "⚖️ Student rights are protected through institutional policies.",
-"student support framework": "🎯 A structured support framework ensures student welfare.",
-"well-being initiatives": "💚 Initiatives focus on overall student well-being.",
-"campus safety culture": "🏫 Safety and responsibility are part of campus culture.",
-"student trust system": "🤝 The institution builds trust through transparent support.",
-"incident reporting system": "📢 Students can report incidents safely.",
-"support accessibility": "📍 Support services are easily accessible to students.",
-"emergency preparedness": "🚨 Preparedness plans ensure safety at all times.",
-"student care services": "🎓 Student care services support holistic development.",
-
-# ---- FINAL MOTIVATION ----
-"college mission statement": "🎯 The mission is to nurture technically competent and socially responsible engineers.",
-"college vision statement": "🌟 The vision is to become a center of excellence in education and research.",
-"future opportunities": "🚀 The college equips students with skills needed for future technologies.",
-"success stories": "🏆 Alumni of the college are placed in reputed companies worldwide.",
-"why vel tech high tech": "💡 VEL TECH HIGH TECH stands for quality education, innovation, and student success.",
-# ---- FINAL MOTIVATION (EXTRA – NEW) ----
-"student success philosophy": "🎓 The institution believes every student can succeed with the right guidance and effort.",
-"education with values": "⚖️ Education is combined with ethics, discipline, and social responsibility.",
-"future ready graduates": "🚀 The college prepares students to face global challenges confidently.",
-"innovation driven learning": "💡 Learning is driven by innovation, creativity, and critical thinking.",
-"career focused education": "🎯 Education focuses on building strong careers and life skills.",
-"holistic education approach": "🌱 The college follows a holistic approach to student development.",
-"student empowerment": "💪 Students are empowered to think independently and lead confidently.",
-"learning beyond syllabus": "📚 Learning extends beyond textbooks through projects and activities.",
-"skill based education": "🛠️ Skill-based education enhances employability and confidence.",
-"academic excellence culture": "🏆 A culture of academic excellence is deeply rooted in the institution.",
-"growth mindset": "🌟 Students are encouraged to develop a growth mindset.",
-"lifelong learning": "📘 The college inspires students to become lifelong learners.",
-"career transformation": "🚀 Education here transforms students into professionals.",
-"knowledge to application": "🔄 Emphasis is on applying knowledge to real-world problems.",
-"student aspiration support": "🎯 Student dreams and aspirations are strongly supported.",
-"leadership development": "🏅 Leadership qualities are nurtured in students.",
-"global perspective": "🌍 Students gain a global outlook through modern education.",
-"confidence building environment": "💬 The campus builds confidence and self-belief.",
-"academic motivation": "📈 Continuous motivation drives student performance.",
-"future innovation leaders": "🤖 Students are trained to become future innovation leaders.",
-"success oriented mindset": "🏆 A success-oriented mindset is encouraged.",
-"personal growth focus": "🌱 Focus on personal growth along with academics.",
-"professional ethics": "⚖️ Professional ethics are integral to education.",
-"student transformation journey": "🎓 Students undergo a complete transformation journey.",
-"education for society": "🤝 Education aims to contribute positively to society.",
-"empowering young minds": "🧠 Young minds are empowered through quality education.",
-"visionary education": "🌟 Education is guided by a strong long-term vision.",
-"future leadership creation": "👑 The college aims to create future leaders.",
-"purpose driven learning": "🎯 Learning is driven by purpose and passion.",
-"success through discipline": "📘 Discipline is the foundation of success.",
-"student inspiration culture": "✨ A culture of inspiration motivates students daily.",
-"academic journey support": "🧭 Students are supported throughout their academic journey.",
-"transformative education": "🔄 Education transforms lives and careers.",
-"career confidence building": "💼 Students graduate with confidence and competence.",
-"education excellence legacy": "🏫 The college builds a legacy of educational excellence.",
-
-# ================= FACILITIES =================
-"library": "📚 Central Library with thousands of books, journals, and e-resources.",
-"digital library": "💻 Digital Library provides access to IEEE, Springer, and online journals.",
-"computer lab": "🖥️ Advanced computer labs with high-speed internet.",
-"laboratories": "🧪 Well-equipped laboratories in all departments.",
-"hostel": "🏠 Separate hostels for boys and girls with Wi-Fi and security.",
-"canteen": "🍽️ Hygienic canteen serving healthy food.",
-"transport": "🚌 College buses operate across Chennai and nearby districts.",
-"sports": "⚽ Facilities for cricket, football, volleyball, basketball, and indoor games.",
-"gym": "💪 Gymnasium available for students.",
-"medical": "🏥 On-campus medical center with first aid and emergency support.",
-"wifi": "🌐 High-speed Wi-Fi across the campus.",
-"auditorium": "🎭 Spacious auditorium for events and seminars.",
-"seminar hall": "🎤 Seminar halls with audio-visual facilities.",
-# ---- FACILITIES (EXTRA – NEW) ----
-"smart classrooms": "📺 Smart classrooms with digital boards and multimedia support.",
-"research labs": "🔬 Dedicated research laboratories for advanced projects and innovation.",
-"innovation center": "🚀 Innovation and incubation center supports student startups.",
-"language lab": "🗣️ Language lab improves communication and soft skills.",
-"placement hall": "🏢 Dedicated halls for placement training and interviews.",
-"conference hall": "🏛️ Conference halls for meetings, reviews, and academic discussions.",
-"library study area": "📖 Silent study zones available in the library.",
-"e-learning facilities": "💻 E-learning facilities support online and blended learning.",
-"student activity center": "🎯 Activity center for clubs and student programs.",
-"open air theatre": "🎬 Open air theatre used for cultural and student events.",
-"indoor sports complex": "🏸 Indoor facilities for badminton, chess, and table tennis.",
-"outdoor sports ground": "🏏 Large playground for outdoor sports activities.",
-"yoga center": "🧘 Yoga and meditation facilities for mental well-being.",
-"parking facility": "🚗 Separate parking facilities for students and staff.",
-"power backup": "🔌 Power backup through generators and solar systems.",
-"solar power system": "🔆 Solar power supports eco-friendly campus operations.",
-"rainwater harvesting": "🌧️ Rainwater harvesting system supports sustainability.",
-"waste management": "♻️ Waste segregation and recycling facilities are maintained.",
-"drinking water facility": "🚰 Safe and purified drinking water available across campus.",
-"rest rooms": "🚻 Clean and well-maintained rest rooms for students.",
-"staff rooms": "🏫 Dedicated staff rooms for faculty members.",
-"administrative block": "🏢 Administrative block handles academic and student services.",
-"accounts office": "💰 Accounts office supports fee and financial queries.",
-"exam cell": "📝 Examination cell manages exams and evaluations.",
-"erp system": "📲 Student ERP system manages attendance and academics.",
-"it support center": "🖥️ IT support center assists with technical issues.",
-"security control room": "🛡️ Central security control room monitors campus safety.",
-"fire safety system": "🚒 Fire safety systems installed across campus.",
-"emergency exits": "🚪 Emergency exits ensure safety during emergencies.",
-"campus lighting": "💡 Well-lit campus ensures safety at night.",
-"notice boards": "📢 Digital and physical notice boards across campus.",
-"help desk office": "🎓 Help desk office supports student queries.",
-"library automation": "📘 Library uses automated management systems.",
-"research resource center": "📚 Research resource center supports scholars.",
-"faculty cabins": "👩‍🏫 Individual cabins provided for faculty members.",
-"student waiting area": "🪑 Waiting areas available for students.",
-"visitor reception": "🛎️ Reception desk guides visitors and parents.",
-"campus maintenance": "🧹 Regular maintenance ensures cleanliness and safety.",
-"campus infrastructure": "🏗️ Modern infrastructure supports quality education.",
-"green landscaping": "🌿 Landscaped gardens enhance campus environment.",
-
-# ===================== RULES & DISCIPLINE =====================
-"discipline": "⚖️ The college maintains strict discipline and code of conduct.",
-"uniform": "👔 Uniform is compulsory on working days.",
-"ragging": "🚫 Ragging is strictly prohibited as per UGC norms.",
-"anti ragging": "📞 Anti-ragging helpline and committee are active on campus.",
-"id card": "🪪 Students must wear ID cards inside the campus.",
-"student portal": "🖥️ Student ERP portal is used for attendance, marks, and notifications.",
-"bonafide": "📄 Bonafide certificates can be requested through the office or ERP.",
-"tc": "📜 Transfer Certificate requests are processed through the admin office.",
-"grievance": "📬 Grievance Redressal Cell handles student complaints.",
-"counseling": "🧠 Counseling support is available for students.",
-# ---- RULES & DISCIPLINE (EXTRA – NEW) ----
-"code of conduct": "📘 Students are expected to follow the institutional code of conduct at all times.",
-"student behavior policy": "⚖️ Proper behavior and respectful conduct are mandatory on campus.",
-"academic discipline": "📚 Academic discipline is strictly enforced in classrooms and labs.",
-"punctuality": "⏰ Students must be punctual for classes, labs, and exams.",
-"classroom rules": "🏫 Classroom rules ensure a focused learning environment.",
-"exam rules": "📝 Examination rules must be strictly followed by students.",
-"malpractice policy": "🚫 Malpractice during exams is strictly prohibited.",
-"attendance compliance": "📊 Attendance compliance is monitored through the ERP system.",
-"late coming policy": "⏱️ Late entry to class is discouraged and monitored.",
-"mobile phone policy": "📵 Mobile phone usage is restricted during class hours.",
-"dress code policy": "👔 Students must follow the prescribed dress code.",
-"identity verification": "🪪 ID verification is mandatory at campus entry points.",
-"campus entry rules": "🚪 Entry and exit timings must be followed.",
-"hostel rules": "🏠 Hostel residents must follow hostel rules and regulations.",
-"library rules": "📚 Library usage rules ensure discipline and silence.",
-"lab safety rules": "🧪 Safety rules must be followed in laboratories.",
-"transport rules": "🚌 Transport rules ensure safe and disciplined travel.",
-"disciplinary committee": "⚖️ A disciplinary committee handles rule violations.",
-"warning system": "⚠️ Warnings are issued for minor disciplinary violations.",
-"penalty system": "📑 Repeated violations may attract penalties.",
-"student accountability": "📘 Students are accountable for their actions on campus.",
-"ethical conduct": "⚖️ Ethical behavior is expected from all students.",
-"respect policy": "🤝 Mutual respect among students and staff is mandatory.",
-"anti harassment policy": "🚫 Harassment of any kind is strictly prohibited.",
-"campus decorum": "🏫 Campus decorum must be maintained at all times.",
-"behavior monitoring": "👀 Student behavior is monitored to ensure safety.",
-"discipline awareness programs": "📢 Awareness programs promote discipline and ethics.",
-"student responsibility": "🎓 Students must take responsibility for their conduct.",
-"rule enforcement": "⚙️ Rules are enforced uniformly for all students.",
-"discipline culture": "🏆 Discipline is a core value of the institution.",
-"safe learning environment": "🛡️ Rules ensure a safe and secure learning environment.",
-"academic honesty": "🧠 Academic honesty is strictly followed.",
-"student ethics training": "📘 Ethics and values are taught through orientation programs.",
-"orientation rules briefing": "📢 Rules and regulations are explained during orientation.",
-"campus harmony rules": "🌈 Rules promote harmony and inclusiveness on campus.",
-"student compliance system": "📊 Compliance is tracked through institutional systems.",
-"student discipline framework": "🎯 A structured framework governs student discipline.",
-
-# ===================== ADMISSIONS =====================
-"admission": "📥 Admissions through Anna University counselling and management quota.",
-"eligibility": "🎓 Eligibility criteria as per Anna University norms.",
-"fees": "💰 Fee structure varies by course and quota.",
-"scholarship": "🎓 Government and merit-based scholarships are available.",
-"counselling code": "🧾 TNEA Counselling Code: 2710.",
-# ---- ADMISSIONS (EXTRA – NEW) ----
-"admission process": "📝 Admissions follow a transparent and merit-based process.",
-"application procedure": "🖊️ Applications can be submitted online or through the admission office.",
-"management quota admission": "🏛️ Management quota admissions are based on eligibility and merit.",
-"government quota admission": "🏫 Government quota seats are allotted through university counselling.",
-"seat allocation": "📊 Seat allocation is done as per counselling norms.",
-"document verification": "📂 Original documents are verified during admission.",
-"required documents": "📎 Documents include mark sheets, TC, community certificate, and ID proof.",
-"admission confirmation": "✅ Admission is confirmed after fee payment and document verification.",
-"admission guidelines": "📘 Admission guidelines follow university and government rules.",
-"lateral entry admission": "📚 Lateral entry is available for diploma holders.",
-"pg admission process": "🎓 PG admissions are based on TANCET or university norms.",
-"entrance exam acceptance": "📝 Entrance exams accepted as per program requirements.",
-"counselling assistance": "🤝 Guidance is provided during counselling and seat selection.",
-"admission help desk": "🎓 Admission help desk assists applicants and parents.",
-"prospectus information": "📘 Prospectus provides complete admission details.",
-"important admission dates": "📅 Admission dates are announced through official channels.",
-"application deadline": "⏰ Applications must be submitted before the deadline.",
-"eligibility verification": "📋 Eligibility is verified before seat confirmation.",
-"admission support services": "📞 Support services guide students through admission process.",
-"parent counselling": "👨‍👩‍👦 Parent counselling sessions are conducted.",
-"admission transparency": "🔍 Transparent admission practices are followed.",
-"online admission portal": "🌐 Online portal supports admission registration.",
-"offline admission support": "🏢 Offline support is available at the admission office.",
-"course counselling": "🎯 Course counselling helps students choose the right program.",
-"seat availability": "📊 Seat availability depends on course and quota.",
-"admission orientation": "🎓 Orientation programs introduce students to campus life.",
-"student onboarding": "🤝 Smooth onboarding process for new students.",
-"admission regulations": "📘 Regulations are followed strictly as per norms.",
-"admission committee": "⚙️ Admission committee oversees the process.",
-"eligibility relaxation": "📋 Eligibility relaxation as per government rules.",
-"admission communication": "📢 Admission updates are communicated officially.",
-"application tracking": "📲 Applicants can track application status.",
-"admission workflow": "🗂️ Structured workflow ensures smooth admissions.",
-"admission verification process": "📑 Multi-level verification ensures accuracy.",
-"admission record maintenance": "🗃️ Admission records are securely maintained.",
-    }
-
-    for key in responses:
-        if key in user_message:
-            return responses[key]
-
-    return responses["default"]
+@app.route("/get_suggestions")
+def get_suggestions():
+    return jsonify(SUGGESTIONS)
 
 
 # ================== TEXT CHAT ==================
@@ -902,12 +329,434 @@ def get_response():
     return jsonify({"reply": bot_reply})
 
 
+# ================== CHAT HISTORY ==================
+@app.route("/get_chat_history")
+def get_chat_history():
+    conn = sqlite3.connect("database.db")
+    c = conn.cursor()
+    c.execute("SELECT user_message, bot_reply FROM messages ORDER BY id DESC LIMIT 20")
+    rows = c.fetchall()
+    conn.close()
+    
+    # Return in reverse order (oldest first for display)
+    history = [{"user": r[0], "bot": r[1]} for r in reversed(rows)]
+    return jsonify(history)
+
+
+# ================== DASHBOARD STATS ==================
+@app.route("/get_stats")
+def get_stats():
+    today = datetime.now().strftime("%Y-%m-%d")
+    conn = sqlite3.connect("database.db")
+    c = conn.cursor()
+    
+    c.execute("SELECT COUNT(*) FROM students")
+    total_students = c.fetchone()[0]
+    
+    c.execute("SELECT COUNT(*) FROM attendance WHERE date = ?", (today,))
+    present_today = c.fetchone()[0]
+    
+    conn.close()
+    
+    return jsonify({
+        "total_students": total_students,
+        "present_today": present_today,
+        "absent_today": max(0, total_students - present_today)
+    })
+
+
+@app.route("/bulk_register", methods=["POST"])
+@login_required
+def bulk_register():
+    data = request.json.get("students", [])
+    if not data:
+        return jsonify({"success": False, "message": "No student data provided."})
+    
+    conn = sqlite3.connect("database.db")
+    c = conn.cursor()
+    
+    count = 0
+    for s in data:
+        name = s.get("name")
+        roll = s.get("roll")
+        if name and roll:
+            # Check if exists
+            c.execute("SELECT id FROM students WHERE roll_number = ?", (roll,))
+            if not c.fetchone():
+                c.execute("INSERT INTO students (name, roll_number) VALUES (?, ?)", (name, roll))
+                count += 1
+    
+    conn.commit()
+    conn.close()
+    return jsonify({"success": True, "message": f"Successfully imported {count} students."})
+
+
 # ================== VOICE CHAT ==================
 @app.route("/voice_chat", methods=["POST"])
 def voice_chat():
     user_message = request.json.get("message", "")
     bot_reply = chatbot_logic(user_message)
     return jsonify({"reply": bot_reply})
+
+
+# ================== ATTENDANCE API ==================
+@app.route("/register_student", methods=["POST"])
+def register_student():
+    try:
+        data = request.json
+        name = data.get("name")
+        roll = data.get("roll")
+        image_data = data.get("image")
+
+        if not name or not roll or not image_data:
+            return jsonify({"success": False, "message": "Missing name, roll number, or image."})
+
+        # Decode base64 image
+        header, encoded = image_data.split(",", 1)
+        image_bytes = base64.b64decode(encoded)
+        nparr = np.frombuffer(image_bytes, np.uint8)
+        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+
+        if USE_FACE_RECOGNITION:
+            rgb_img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            face_locations = face_recognition.face_locations(rgb_img)
+            if not face_locations:
+                return jsonify({"success": False, "message": "No face detected. Please try again."})
+            face_encodings = face_recognition.face_encodings(rgb_img, face_locations)
+            encoding_to_save = face_encodings[0]
+        else:
+            # OpenCV Fallback Detection
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            
+            # Try detection with multiple settings for sensitivity
+            # Setting 1: Standard
+            faces = face_cascade.detectMultiScale(gray, 1.1, 5, minSize=(100, 100))
+            
+            # Setting 2: If failed, try with equalization and more sensitivity
+            if len(faces) == 0:
+                gray_eq = cv2.equalizeHist(gray)
+                faces = face_cascade.detectMultiScale(gray_eq, 1.05, 3, minSize=(80, 80))
+                if len(faces) > 0:
+                    gray = gray_eq
+            
+            if len(faces) == 0:
+                return jsonify({"success": False, "message": "No face detected. Please ensure you are in a well-lit area and looking directly at the camera."})
+            
+            # Take the largest face found
+            faces = sorted(faces, key=lambda f: f[2]*f[3], reverse=True)
+            x, y, w, h = faces[0]
+            face_roi = gray[y:y+h, x:x+w]
+            # Resize to standard size
+            encoding_to_save = cv2.resize(face_roi, (150, 150))
+
+        encoding_blob = pickle.dumps(encoding_to_save)
+
+        conn = sqlite3.connect("database.db")
+        c = conn.cursor()
+        try:
+            c.execute(
+                "INSERT INTO students (name, roll_number, face_encoding, registered_at) VALUES (?, ?, ?, ?)",
+                (name, roll, encoding_blob, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+            )
+            conn.commit()
+            return jsonify({"success": True, "message": f"Successfully registered {name}!"})
+        except sqlite3.IntegrityError:
+            return jsonify({"success": False, "message": "Roll number already registered."})
+        finally:
+            conn.close()
+
+    except Exception as e:
+        print(f"Error in registration: {e}")
+        return jsonify({"success": False, "message": "Error during registration. Check lighting."})
+
+
+@app.route("/mark_attendance", methods=["POST"])
+def mark_attendance():
+    try:
+        data = request.json
+        encoded = data.get("image")
+        selected_subject = data.get("subject", "Overall Attendance")
+
+        # 🕒 Check Time Window FIRST
+        is_valid, time_msg = is_within_time_window(selected_subject)
+        if not is_valid:
+            return jsonify({"success": False, "message": time_msg})
+
+        if not encoded:
+            return jsonify({"success": False, "message": "No image data received."})
+
+        # Decode base64 image
+        header, encoded_base64 = encoded.split(",", 1)
+        image_bytes = base64.b64decode(encoded_base64)
+        nparr = np.frombuffer(image_bytes, np.uint8)
+        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+
+        conn = sqlite3.connect("database.db")
+        c = conn.cursor()
+        c.execute("SELECT id, name, roll_number, face_encoding FROM students")
+        known_students = c.fetchall()
+        conn.close()
+
+        if not known_students:
+            return jsonify({"success": False, "message": "Database empty. Please register first."})
+
+        if USE_FACE_RECOGNITION:
+            rgb_img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            face_locations = face_recognition.face_locations(rgb_img)
+            if not face_locations:
+                return jsonify({"success": False, "message": "Face not detected clearly."})
+            current_encodings = face_recognition.face_encodings(rgb_img, face_locations)
+            
+            known_encodings = [pickle.loads(s[3]) for s in known_students]
+            
+            for current_encoding in current_encodings:
+                matches = face_recognition.compare_faces(known_encodings, current_encoding, tolerance=0.6)
+                if True in matches:
+                    match_index = matches.index(True)
+                    return record_attendance(known_students[match_index], encoded_base64, selected_subject)
+        else:
+            # Enhanced OpenCV Fallback Matching
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            
+            # Multi-pass detection sensitivity
+            faces = face_cascade.detectMultiScale(gray, 1.1, 5, minSize=(100, 100))
+            if len(faces) == 0:
+                gray_eq = cv2.equalizeHist(gray)
+                faces = face_cascade.detectMultiScale(gray_eq, 1.05, 3, minSize=(80, 80))
+                if len(faces) > 0:
+                    gray = gray_eq
+
+            if len(faces) == 0:
+                return jsonify({"success": False, "message": "Face not found. Keep steady and ensure sufficient lighting."})
+            
+            # Use largest face
+            faces = sorted(faces, key=lambda f: f[2]*f[3], reverse=True)
+            x, y, w, h = faces[0]
+            current_face = cv2.resize(gray[y:y+h, x:x+w], (150, 150))
+
+            best_match = None
+            max_val = -1 # Higher correlation is better
+
+            for student in known_students:
+                stored_face = pickle.loads(student[3])
+                
+                # Verify it's an image block and not a high-level encoding
+                if not isinstance(stored_face, np.ndarray) or stored_face.shape != (150, 150):
+                    continue
+                
+                # Template matching (Correlation)
+                res = cv2.matchTemplate(current_face, stored_face, cv2.TM_CCOEFF_NORMED)
+                _, val, _, _ = cv2.minMaxLoc(res)
+                
+                if val > max_val:
+                    max_val = val
+                    best_match = student
+
+            # Correlation threshold (0.5 to 0.7 is usually good for face patterns)
+            if best_match and max_val > 0.65:
+                return record_attendance(best_match, encoded_base64, selected_subject)
+
+        return jsonify({"success": False, "message": "Face not matched. Try again or re-register."})
+
+    except Exception as e:
+        print(f"Error in attendance scan: {e}")
+        return jsonify({"success": False, "message": "System Error. Stabilize the image."})
+
+@app.route("/face_login", methods=["POST"])
+def face_login():
+    try:
+        data = request.json
+        encoded = data.get("image")
+        if not encoded:
+            return jsonify({"success": False, "message": "No image data."})
+
+        header, encoded_base64 = encoded.split(",", 1)
+        image_bytes = base64.b64decode(encoded_base64)
+        nparr = np.frombuffer(image_bytes, np.uint8)
+        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+
+        conn = sqlite3.connect("database.db")
+        c = conn.cursor()
+        c.execute("SELECT id, name, roll_number, face_encoding FROM students")
+        known_students = c.fetchall()
+        conn.close()
+
+        if USE_FACE_RECOGNITION:
+            rgb_img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            face_locations = face_recognition.face_locations(rgb_img)
+            if not face_locations:
+                return jsonify({"success": False, "message": "No face detected."})
+            current_encodings = face_recognition.face_encodings(rgb_img, face_locations)
+            known_encodings = [pickle.loads(s[3]) for s in known_students]
+            
+            for current_encoding in current_encodings:
+                matches = face_recognition.compare_faces(known_encodings, current_encoding, tolerance=0.6)
+                if True in matches:
+                    match_index = matches.index(True)
+                    return jsonify({"success": True, "roll": known_students[match_index][2]})
+        else:
+            # OpenCV Fallback
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            faces = face_cascade.detectMultiScale(gray, 1.1, 5, minSize=(100, 100))
+            if len(faces) > 0:
+                faces = sorted(faces, key=lambda f: f[2]*f[3], reverse=True)
+                x, y, w, h = faces[0]
+                current_face = cv2.resize(gray[y:y+h, x:x+w], (150, 150))
+                best_match = None
+                max_val = -1
+                for student in known_students:
+                    stored_face = pickle.loads(student[3])
+                    if not isinstance(stored_face, np.ndarray): continue
+                    res = cv2.matchTemplate(current_face, stored_face, cv2.TM_CCOEFF_NORMED)
+                    _, val, _, _ = cv2.minMaxLoc(res)
+                    if val > max_val:
+                        max_val = val
+                        best_match = student
+                if best_match and max_val > 0.65:
+                    return jsonify({"success": True, "roll": best_match[2]})
+
+        return jsonify({"success": False, "message": "Identity not verified. Unrecognized face."})
+    except Exception as e:
+        return jsonify({"success": False, "message": f"System Error: {str(e)}"})
+
+def record_attendance(student_data, image_b64, subject):
+    student_id, name, roll, _ = student_data
+    today = datetime.now().strftime("%Y-%m-%d")
+    
+    conn = sqlite3.connect("database.db")
+    c = conn.cursor()
+    # Updated: Check if already present FOR THIS SUBJECT today
+    c.execute("SELECT id FROM attendance WHERE student_id = ? AND date = ? AND subject = ?", (student_id, today, subject))
+    if c.fetchone():
+        conn.close()
+        return jsonify({"success": False, "message": f"Already marked for {subject}."})
+
+    now = datetime.now()
+    c.execute(
+        "INSERT INTO attendance (student_id, student_name, roll_number, subject, date, time, captured_face) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (student_id, name, roll, subject, today, now.strftime("%H:%M:%S"), image_b64)
+    )
+    conn.commit()
+    conn.close()
+    return jsonify({
+        "success": True, 
+        "message": f"Welcome {name}! Attendance for {subject} recorded.",
+        "student_name": name
+    })
+
+
+@app.route("/get_attendance")
+def get_attendance():
+    date = request.args.get("date")
+    if not date:
+        date = datetime.now().strftime("%Y-%m-%d")
+
+    subject_filter = request.args.get("subject")
+
+    conn = sqlite3.connect("database.db")
+    c = conn.cursor()
+    
+    # 1. Total unique class days so far (Global)
+    c.execute("SELECT COUNT(DISTINCT date) FROM attendance")
+    total_class_days = c.fetchone()[0] or 1 
+    
+    # 2. Get all registered students
+    c.execute("SELECT id, name, roll_number FROM students")
+    all_students = c.fetchall()
+    
+    # 3. Get total present count for ALL time per student
+    c.execute("SELECT student_id, COUNT(DISTINCT date) FROM attendance GROUP BY student_id")
+    all_time_present = {row[0]: row[1] for row in c.fetchall()}
+
+    # 4. Get present students for THIS specific date and potentially THIS subject
+    if subject_filter:
+        c.execute("SELECT student_id, time, captured_face, subject FROM attendance WHERE date = ? AND subject = ?", (date, subject_filter))
+    else:
+        c.execute("SELECT student_id, time, captured_face, subject FROM attendance WHERE date = ?", (date,))
+    
+    present_rows = c.fetchall()
+    
+    present_data = {}
+    for row in present_rows:
+        sid, time, face, subject = row
+        face_str = face.decode('utf-8') if (face and isinstance(face, bytes)) else face
+        if sid not in present_data: present_data[sid] = []
+        present_data[sid].append({"time": time, "face": face_str, "subject": subject})
+    
+    conn.close()
+
+    results = []
+    for student_id, name, roll in all_students:
+        present_days = all_time_present.get(student_id, 0)
+        percentage = round((present_days / total_class_days) * 100, 1)
+
+        if student_id in present_data:
+            # We take the record that matches the filter or the most recent
+            rec = present_data[student_id][-1]
+            results.append({
+                "name": name,
+                "roll": roll,
+                "date": date,
+                "time": rec["time"],
+                "subject": rec["subject"],
+                "status": "Present",
+                "face": rec["face"],
+                "percentage": percentage
+            })
+        else:
+            results.append({
+                "name": name,
+                "roll": roll,
+                "date": date,
+                "time": "-",
+                "subject": subject_filter if subject_filter else "-",
+                "status": "Absent",
+                "face": None,
+                "percentage": percentage
+            })
+            
+    # Sort: Present first, then roll number
+    results.sort(key=lambda x: (x["status"] != "Present", x["roll"]))
+    
+    return jsonify(results)
+
+@app.route("/student_profile/<roll>")
+def student_profile(roll):
+    conn = sqlite3.connect("database.db")
+    c = conn.cursor()
+    
+    # Get student info
+    c.execute("SELECT id, name FROM students WHERE roll_number = ?", (roll,))
+    student = c.fetchone()
+    
+    if not student:
+        conn.close()
+        return jsonify({"success": False, "message": "Student not found."})
+    
+    student_id, name = student
+    
+    # Get total days class was held (unique dates in attendance table)
+    c.execute("SELECT COUNT(DISTINCT date) FROM attendance")
+    total_class_days = c.fetchone()[0] or 1 # Avoid division by zero
+    
+    # Get student's present days
+    c.execute("SELECT date, time FROM attendance WHERE student_id = ? ORDER BY date DESC", (student_id,))
+    history = c.fetchall()
+    present_days = len(history)
+    
+    percentage = round((present_days / total_class_days) * 100, 1)
+    
+    conn.close()
+    
+    return jsonify({
+        "success": True,
+        "name": name,
+        "roll": roll,
+        "percentage": percentage,
+        "present_count": present_days,
+        "total_days": total_class_days,
+        "history": [{"date": h[0], "time": h[1]} for h in history]
+    })
 
 
 # ================== MAIN ==================

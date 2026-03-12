@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Login - Vel Tech</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <link rel="stylesheet" href="/static/css/attendance.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <style>
+        .login-box {
+            max-width: 400px;
+            margin: 100px auto;
+            background: var(--glass);
+            backdrop-filter: blur(12px);
+            border: 1px solid var(--glass-border);
+            padding: 40px;
+            border-radius: 24px;
+            text-align: center;
+            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.3);
+        }
+
+        .login-box img {
+            width: 80px;
+            margin-bottom: 20px;
+        }
+
+        .login-btn {
+            margin-top: 20px;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="login-box animate-in">
+        <i class="fas fa-lock" style="font-size: 3rem; margin-bottom: 15px; color: var(--primary);"></i>
+        <h1>Admin Portal</h1>
+        <p class="subtitle">Enter credentials to access reports and registration.</p>
+
+        <div class="form-group">
+            <label>Username</label>
+            <input type="text" id="username" class="form-input" placeholder="admin">
+        </div>
+
+        <div class="form-group">
+            <label>Password</label>
+            <input type="password" id="password" class="form-input" placeholder="••••••••">
+        </div>
+
+        <button onclick="handleLogin()" class="action-btn login-btn">
+            <i class="fas fa-sign-in-alt"></i> Login securely
+        </button>
+
+        <p id="login-error" style="color: #f87171; margin-top: 15px; display: none;"></p>
+
+        <div style="margin-top: 20px;">
+            <a href="/" style="color: var(--primary); text-decoration: none; font-size: 0.9rem;">
+                <i class="fas fa-arrow-left"></i> Back to Chatbot
+            </a>
+        </div>
+    </div>
+
+    <script>
+        async function handleLogin() {
+            const user = document.getElementById('username').value;
+            const pass = document.getElementById('password').value;
+            const errorEl = document.getElementById('login-error');
+
+            const res = await fetch('/api/login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username: user, password: pass })
+            });
+
+            const data = await res.json();
+            if (data.success) {
+                window.location.href = '/report';
+            } else {
+                errorEl.innerText = data.message;
+                errorEl.style.display = 'block';
+            }
+        }
+    </script>
+</body>
+
+</html>

@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GPA Calculator - Vel Tech</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <link rel="stylesheet" href="/static/css/attendance.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <style>
+        .gpa-row {
+            display: grid;
+            grid-template-columns: 2fr 1fr 1fr 40px;
+            gap: 15px;
+            margin-bottom: 10px;
+            align-items: center;
+        }
+
+        .gpa-card {
+            background: rgba(255, 255, 255, 0.05);
+            padding: 25px;
+            border-radius: 20px;
+            margin-bottom: 25px;
+        }
+
+        .result-display {
+            text-align: center;
+            padding: 20px;
+            background: var(--primary-gradient);
+            border-radius: 15px;
+            margin-top: 20px;
+        }
+    </style>
+</head>
+
+<body>
+    <nav class="navbar">
+        <div class="nav-logo">
+            <i class="fas fa-graduation-cap"></i> <span>Vel Tech High Tech</span>
+        </div>
+        <ul class="nav-links">
+            <li><a href="/"><i class="fas fa-comment-dots"></i> Chatbot</a></li>
+            <li><a href="/gpa" class="active"><i class="fas fa-calculator"></i> GPA Calc</a></li>
+            <li><a href="/attendance"><i class="fas fa-camera"></i> Attendance</a></li>
+            <li><a href="/report"><i class="fas fa-file-alt"></i> Report</a></li>
+        </ul>
+    </nav>
+
+    <div class="attendance-container animate-in">
+        <h1><i class="fas fa-calculator"></i> GPA Calculator</h1>
+        <p class="subtitle">Enter your course grades and credits to calculate your Semester GPA (Anna University Scale).
+        </p>
+
+        <div id="subjects-container">
+            <div class="gpa-row">
+                <label>Subject Name</label>
+                <label>Grade</label>
+                <label>Credits</label>
+                <span></span>
+            </div>
+            <!-- Dynamic rows will be here -->
+        </div>
+
+        <button onclick="addRow()" class="action-btn"
+            style="background: rgba(255,255,255,0.1); border: 1px dashed var(--primary); margin-bottom: 20px;">
+            <i class="fas fa-plus"></i> Add Subject
+        </button>
+
+        <button onclick="calculateGPA()" class="action-btn">
+            <i class="fas fa-check-circle"></i> Calculate GPA
+        </button>
+
+        <div id="gpa-result" class="result-display" style="display: none;">
+            <p style="font-size: 0.9rem; margin-bottom: 5px;">YOUR SEMESTER GPA</p>
+            <h2 id="final-gpa" style="font-size: 3rem; margin: 0;">0.00</h2>
+            <p id="gpa-message" style="margin-top: 5px;"></p>
+        </div>
+    </div>
+
+    <script>
+        const gradePoints = { "O": 10, "A+": 9, "A": 8, "B+": 7, "B": 6, "C": 5, "U": 0 };
+
+        function addRow() {
+            const container = document.getElementById('subjects-container');
+            const row = document.createElement('div');
+            row.className = 'gpa-row animate-in';
+            row.innerHTML = `
+                <input type="text" class="form-input" placeholder="e.g. Data Structures">
+                <select class="form-input grade-select">
+                    <option value="O">O (10)</option>
+                    <option value="A+">A+ (9)</option>
+                    <option value="A">A (8)</option>
+                    <option value="B+">B+ (7)</option>
+                    <option value="B">B (6)</option>
+                    <option value="C">C (5)</option>
+                    <option value="U">U (0)</option>
+                </select>
+                <input type="number" class="form-input credit-input" value="3" min="1" max="4">
+                <button onclick="this.parentElement.remove()" style="background:none; border:none; color:#f87171; cursor:pointer;"><i class="fas fa-trash"></i></button>
+            `;
+            container.appendChild(row);
+        }
+
+        function calculateGPA() {
+            const grades = document.getElementsByClassName('grade-select');
+            const credits = document.getElementsByClassName('credit-input');
+
+            let totalPoints = 0;
+            let totalCredits = 0;
+
+            for (let i = 0; i < grades.length; i++) {
+                const grade = grades[i].value;
+                const credit = parseFloat(credits[i].value);
+                totalPoints += (gradePoints[grade] * credit);
+                totalCredits += credit;
+            }
+
+            const gpa = totalCredits > 0 ? (totalPoints / totalCredits).toFixed(2) : 0;
+
+            document.getElementById('final-gpa').innerText = gpa;
+            document.getElementById('gpa-result').style.display = 'block';
+
+            let msg = "";
+            if (gpa >= 9) msg = "Excellent! You are an Outstanding student! 🌟";
+            else if (gpa >= 8) msg = "Great Work! Keep it up! 👏";
+            else if (gpa >= 7) msg = "Good Job! You can do even better. 👍";
+            else msg = "Work hard! Focus on your next semester. 📚";
+
+            document.getElementById('gpa-message').innerText = msg;
+        }
+
+        // Add 3 rows by default
+        window.onload = () => {
+            addRow(); addRow(); addRow();
+        };
+    </script>
+</body>
+
+</html>
